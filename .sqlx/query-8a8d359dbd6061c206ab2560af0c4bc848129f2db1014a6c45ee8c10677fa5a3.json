@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO farmer_stats (\n            challenge_hash, sp_hash, running, og_plot_count,\n            nft_plot_count, compresses_plot_count, invalid_plot_count,\n            total_plot_space, full_node_height, full_node_difficulty,\n            full_node_synced, gathered\n        )\n        VALUES ( $1, $2, $3,  $4,\n                 $5, $6, $7,\n                 $8, $9, $10,\n                 $11, $12\n        )\n        ON CONFLICT(challenge_hash, sp_hash) DO UPDATE SET\n            running               = excluded.running,\n            og_plot_count         = excluded.og_plot_count,\n            nft_plot_count        = excluded.nft_plot_count,\n            compresses_plot_count = excluded.compresses_plot_count,\n            invalid_plot_count    = excluded.invalid_plot_count,\n            total_plot_space      = excluded.total_plot_space,\n            full_node_height      = excluded.full_node_height,\n            full_node_difficulty  = excluded.full_node_difficulty,\n            full_node_synced      = excluded.full_node_synced,\n            gathered              = excluded.gathered\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "8a8d359dbd6061c206ab2560af0c4bc848129f2db1014a6c45ee8c10677fa5a3"
+}

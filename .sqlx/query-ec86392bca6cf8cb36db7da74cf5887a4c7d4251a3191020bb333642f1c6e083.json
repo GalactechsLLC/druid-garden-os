@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO plugins (id, label, name, enabled, plugin_type, source, run_command, repo, tag, version, added, updated)\n        VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n        ON CONFLICT (name)\n        DO UPDATE SET\n            label = EXCLUDED.label,\n            name = EXCLUDED.name,\n            enabled = EXCLUDED.enabled,\n            plugin_type = EXCLUDED.plugin_type,\n            source = EXCLUDED.source,\n            run_command = EXCLUDED.run_command,\n            repo = EXCLUDED.repo,\n            tag = EXCLUDED.tag,\n            version = EXCLUDED.version\n        RETURNING name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ec86392bca6cf8cb36db7da74cf5887a4c7d4251a3191020bb333642f1c6e083"
+}

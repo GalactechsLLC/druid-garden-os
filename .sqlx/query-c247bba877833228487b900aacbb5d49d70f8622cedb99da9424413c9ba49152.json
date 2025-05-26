@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT challenge_hash, sp_hash, running, og_plot_count, nft_plot_count, compresses_plot_count,\n               invalid_plot_count, total_plot_space, full_node_height, full_node_difficulty,\n               full_node_synced, gathered\n        FROM farmer_stats\n        WHERE gathered >= $1\n        AND gathered <= $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "challenge_hash",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "sp_hash",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "running",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "og_plot_count",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "nft_plot_count",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "compresses_plot_count",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "invalid_plot_count",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "total_plot_space",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "full_node_height",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "full_node_difficulty",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "full_node_synced",
+        "ordinal": 10,
+        "type_info": "Integer"
+      },
+      {
+        "name": "gathered",
+        "ordinal": 11,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c247bba877833228487b900aacbb5d49d70f8622cedb99da9424413c9ba49152"
+}

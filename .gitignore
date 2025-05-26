@@ -1,0 +1,7 @@
+target/
+.env
+.idea
+*.sqlite
+*.sqlite-journal
+builds
+build_output

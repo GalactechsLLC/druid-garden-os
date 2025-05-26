@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT gathered\n        FROM farmer_stats\n        WHERE challenge_hash = $1\n          AND sp_hash        = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "gathered",
+        "ordinal": 0,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4b0c05c0112a7309eafb1c113cb91836a4886ecb0fd3e9915afe88f81036cff3"
+}

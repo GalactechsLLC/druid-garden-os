@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT PE.plugin_id, PE.key, PE.value, PE.added, PE.updated\n        FROM plugin_environment as PE\n        LEFT JOIN plugins as P ON PE.plugin_id = P.id\n        WHERE P.name = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "plugin_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "key",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "value",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "added",
+        "ordinal": 3,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "updated",
+        "ordinal": 4,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5f903641c6035a33c3a0b901fea460a8e2958b16241da49b26c1e449dc743721"
+}

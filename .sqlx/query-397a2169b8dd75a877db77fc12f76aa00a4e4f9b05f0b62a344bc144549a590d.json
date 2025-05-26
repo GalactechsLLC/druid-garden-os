@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT plugin_id, key, value, added, updated\n        FROM plugin_environment\n        WHERE plugin_id = $1 AND key = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "plugin_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "key",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "value",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "added",
+        "ordinal": 3,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "updated",
+        "ordinal": 4,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "397a2169b8dd75a877db77fc12f76aa00a4e4f9b05f0b62a344bc144549a590d"
+}

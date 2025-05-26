@@ -1,0 +1,6 @@
+[submodule "dg_edge_updater"]
+	path = dg_edge_updater
+	url = git@github.com:GalactechsLLC/dg_edge_updater.git
+[submodule "druid-garden-os-ui"]
+	path = druid-garden-os-ui
+	url = git@github.com:GalactechsLLC/druid-garden-os-ui.git

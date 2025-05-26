@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT id, label, name, enabled, plugin_type, source, run_command, repo, tag, version, added, updated\n        FROM plugins\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "label",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "enabled",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "plugin_type",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "source",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "run_command",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "repo",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "tag",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "version",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "added",
+        "ordinal": 10,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "updated",
+        "ordinal": 11,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e9e28c925b0eeaa3d556490bbf5b09ab5bf3450a913f044ad814f0a6cbaf91f1"
+}

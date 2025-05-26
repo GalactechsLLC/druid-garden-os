@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT key, value, last_value, category, system, created, modified\n        FROM config\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "key",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "value",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_value",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "category",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "system",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created",
+        "ordinal": 5,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "modified",
+        "ordinal": 6,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8a2a8fc20dd9b5379b0cb00cbf2f858420b10f9ea0153d93c1e10adef1e7fb1c"
+}

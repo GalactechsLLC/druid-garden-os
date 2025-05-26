@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT 1\n        FROM users\n        WHERE username = $1\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "1",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2180fef74a34dc25dc9be6fa57bd9555174db25e875b1fdefb33613a89e6a24b"
+}

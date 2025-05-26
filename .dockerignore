@@ -1,0 +1,10 @@
+*
+!dg_edge_updater
+dg_edge_updater/target
+!druid-garden-os-ui
+druid-garden-os-ui/node_modules
+!src
+!.sqlx
+!migrations
+!Cargo.lock
+!Cargo.toml

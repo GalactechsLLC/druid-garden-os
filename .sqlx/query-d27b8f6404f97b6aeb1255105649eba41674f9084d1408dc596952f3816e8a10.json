@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO config (key, value, last_value, category, system, created, modified)\n        VALUES ($1, $2, $3, $4, $5, $6, $7)\n        ON CONFLICT (key)\n        DO UPDATE SET\n            last_value = value,\n            value = EXCLUDED.value,\n            category = EXCLUDED.category,\n            modified = EXCLUDED.modified\n        RETURNING key\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "key",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d27b8f6404f97b6aeb1255105649eba41674f9084d1408dc596952f3816e8a10"
+}
