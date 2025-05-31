@@ -1,16 +1,21 @@
+use log::debug;
 use portfu::prelude::State;
 use portfu_core::Json;
 use portfu_macros::{delete, post, put};
 use serde::{Deserialize, Serialize};
 use std::io::{Error, ErrorKind};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
-use tokio::io::AsyncWriteExt;
+use tokio::fs::{read_link, File};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::RwLock;
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub enum EntryType {
     Directory,
     File,
+    SymLink(PathBuf),
+    Unknown,
 }
 
 #[derive(Serialize)]
@@ -27,7 +32,9 @@ pub struct FileContents {
 }
 
 #[derive(Debug, Default)]
-pub struct FileManagerPlugin {}
+pub struct FileManagerPlugin {
+    problematic_paths: RwLock<Vec<PathBuf>>,
+}
 impl FileManagerPlugin {
     pub fn new() -> FileManagerPlugin {
         FileManagerPlugin::default()
@@ -37,7 +44,7 @@ impl FileManagerPlugin {
         let path = if user_path.starts_with("~") {
             let stripped = user_path
                 .strip_prefix("~")
-                .expect("Checked Path Existance Above");
+                .expect("Checked Path Existence Above");
             if let Some(home_dir) = home::home_dir() {
                 home_dir.join(stripped)
             } else {
@@ -46,19 +53,40 @@ impl FileManagerPlugin {
         } else {
             user_path
         };
+        if self.problematic_paths.read().await.contains(&path) {
+            return Err(Error::new(ErrorKind::InvalidInput, "Path is not valid"));
+        } else if is_fuse_filesystem(&path.to_string_lossy()).await? {
+            self.problematic_paths.write().await.push(path.clone());
+            return Err(Error::new(ErrorKind::InvalidInput, "Path is not valid"));
+        }
         let mut entries: Vec<FileEntry> = Vec::new();
         let mut dir_entry = tokio::fs::read_dir(path).await?;
         while let Some(entry) = dir_entry.next_entry().await? {
-            let is_dir = entry.file_type().await?.is_dir();
-            let path = entry.path().to_string_lossy().to_string();
-            let size = entry.metadata().await?.len();
+            let file_type = entry.file_type().await?;
+            let path_buf = entry.path();
+            let path = path_buf.to_string_lossy().to_string();
+            debug!("Found entry: {}", path);
+            let (entry_type, size) = if file_type.is_dir() {
+                if self.problematic_paths.read().await.contains(&path_buf) {
+                    continue;
+                } else if is_fuse_filesystem(&path).await? {
+                    self.problematic_paths.write().await.push(path_buf.clone());
+                    continue;
+                } else {
+                    (EntryType::Directory, 0)
+                }
+            } else if file_type.is_file() {
+                (EntryType::File, entry.metadata().await?.len())
+            } else if file_type.is_symlink() {
+                let linked_path = read_link(entry.path()).await?;
+                (EntryType::SymLink(linked_path), 0)
+            } else {
+                (EntryType::Unknown, 0)
+            };
+            debug!("Entry Type: {:?}", entry_type);
             entries.push(FileEntry {
                 path,
-                entry_type: if is_dir {
-                    EntryType::Directory
-                } else {
-                    EntryType::File
-                },
+                entry_type,
                 size,
             })
         }
@@ -236,4 +264,24 @@ pub async fn remove(
         Some(params) => state.0.remove(params.path).await,
         None => Err(Error::new(ErrorKind::InvalidInput, "No Path Specified")),
     }
+}
+
+pub async fn is_fuse_filesystem(path: &str) -> Result<bool, Error> {
+    const MOUNTS_FILE: &str = "/proc/mounts";
+    let file = File::open(MOUNTS_FILE).await?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    while let Some(line) = lines.next_line().await? {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3 && parts[1] == path && parts[2] == "fuse" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[tokio::test]
+async fn test_fuse_detect() {
+    let is_fuse_path = is_fuse_filesystem("/keybase").await;
+    println!("{:?}", is_fuse_path);
 }

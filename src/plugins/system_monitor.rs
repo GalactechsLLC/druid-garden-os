@@ -1,5 +1,7 @@
 use dg_network_manager::all_devices;
 use dg_network_manager::dbus_api::devices::Device;
+use dg_sysfs::classes::block::disk::{DiskType, FileSystem, Partition};
+use dg_sysfs::classes::block::BlockEnumerator;
 use log::{debug, error, warn};
 use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
 use nvml_wrapper::Nvml;
@@ -10,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use sysinfo::{DiskKind, Disks, System};
+use sysinfo::System;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
@@ -50,11 +52,17 @@ pub struct MemoryInfo {
 
 #[derive(Serialize)]
 pub struct DiskInfo {
-    pub path: String,
+    pub dev_path: String,
+    pub mount_path: Option<String>,
+    pub file_system: Option<FileSystem>,
     pub name: String,
     pub total: u64,
     pub used: u64,
     pub usage: DiskUsage,
+    pub partitions: Vec<Partition>,
+    pub vendor: Option<String>,
+    pub model: Option<String>,
+    pub disk_type: DiskType,
 }
 
 #[derive(Serialize)]
@@ -81,13 +89,13 @@ pub struct NetworkInfo {
     pub data_uploaded: u64,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum GpuType {
     Amd,
     Nvidia,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct GpuInfo {
     pub index: u32,
     pub brand: GpuType,
@@ -187,23 +195,24 @@ struct AmdGPUUsage {
     mem_usage: Option<AmdMemoryUsage>,
 }
 
+#[derive(Debug)]
 pub struct SystemMonitorPlugin {
     system: RwLock<System>,
-    disks: RwLock<Disks>,
+    disks: RwLock<BlockEnumerator>,
     networks: RwLock<HashMap<String, Device>>,
     gpus: RwLock<Vec<GpuInfo>>,
     nvml: RwLock<Option<Nvml>>,
     cpu_count: usize,
     last_disk_update: AtomicU64,
     last_net_update: AtomicU64,
+    detected_amd_gpu: AtomicBool,
 }
 impl SystemMonitorPlugin {
     pub async fn new() -> SystemMonitorPlugin {
         let mut system = System::new_all();
         //We Need to refresh it after a short time to ensure that the data can be calculated
         system.refresh_cpu_usage();
-        let disks = Disks::new_with_refreshed_list();
-        let cpu_count = system.physical_core_count().unwrap_or_default();
+        let cpu_count = System::physical_core_count().unwrap_or_default();
         //Try TO Initialize Nvidia Interface
         let mut gpus = vec![];
         let nvml = match Nvml::init() {
@@ -217,18 +226,22 @@ impl SystemMonitorPlugin {
             }
         };
         //Detect AMD Devices
-        if SystemMonitorPlugin::has_amd_gpu_detection().await {
+        let detected_amd_gpu = if SystemMonitorPlugin::has_amd_gpu_detection().await {
             gpus.extend(SystemMonitorPlugin::get_amd_gpu_info().await);
-        }
+            AtomicBool::new(true)
+        } else {
+            AtomicBool::new(false)
+        };
         SystemMonitorPlugin {
             system: RwLock::new(system),
-            disks: RwLock::new(disks),
+            disks: RwLock::new(BlockEnumerator::new()),
             networks: RwLock::new(Default::default()),
             nvml: RwLock::new(nvml),
             gpus: RwLock::new(gpus),
             cpu_count,
             last_disk_update: AtomicU64::new(0),
             last_net_update: AtomicU64::new(0),
+            detected_amd_gpu,
         }
     }
     fn get_nvidia_gpu_info(nvml: &Nvml) -> Vec<GpuInfo> {
@@ -478,25 +491,47 @@ impl SystemMonitorPlugin {
     pub async fn get_disk_info(&self) -> Result<Vec<DiskInfo>, Error> {
         let disks = self.disks.read().await;
         let mut disk_info = vec![];
-        for disk in disks.iter() {
-            let usage = disk.usage();
-            if matches!(disk.kind(), DiskKind::Unknown(_)) {
+        for disk in disks.get_all_disks() {
+            let usage = disks.get_disk_usage(&disk.name);
+            if matches!(disk.disk_type, DiskType::Unknown) {
                 continue;
             }
             disk_info.push(DiskInfo {
-                path: disk.mount_point().display().to_string(),
-                name: disk.name().to_string_lossy().to_string(),
-                total: disk.total_space(),
-                used: disk.total_space() - disk.available_space(),
+                dev_path: disk.device.display().to_string(),
+                mount_path: disk.mount_path.as_ref().map(|p| p.display().to_string()),
+                file_system: disk.file_system,
+                partitions: disk.partitions.clone(),
+                name: disk.name.clone(),
+                vendor: disk.vendor.clone(),
+                model: disk.model.clone(),
+                disk_type: disk.disk_type,
+                total: disk.space_info.map(|v| v.total_space).unwrap_or(0),
+                used: disk.space_info.map(|v| v.used_space).unwrap_or(0),
                 usage: DiskUsage {
-                    recently_read: usage.read_bytes,
-                    recently_writen: usage.written_bytes,
-                    total_read: usage.total_read_bytes,
-                    total_writen: usage.total_written_bytes,
+                    recently_read: usage.as_ref().map(|v| v.recently_read).unwrap_or_default(),
+                    recently_writen: usage
+                        .as_ref()
+                        .map(|v| v.recently_writen)
+                        .unwrap_or_default(),
+                    total_read: usage.as_ref().map(|v| v.total_read).unwrap_or_default(),
+                    total_writen: usage.as_ref().map(|v| v.total_writen).unwrap_or_default(),
                 },
             })
         }
         Ok(disk_info)
+    }
+
+    pub async fn reload_disks(&self) -> Result<(), Error> {
+        if let Err(e) = self.disks.write().await.reload_disks().await {
+            error!("Failed to Update Disk Usage: {e:?}");
+        } else {
+            let now_seconds = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Expected System Time to be After EPOCH")
+                .as_secs();
+            self.last_disk_update.store(now_seconds, Ordering::Relaxed);
+        }
+        Ok(())
     }
     pub async fn get_network_info(&self) -> Result<Vec<NetworkInfo>, Error> {
         let networks = self.networks.read().await.clone();
@@ -678,11 +713,14 @@ pub async fn refresh_system_info(state: State<SystemMonitorPlugin>) -> Result<()
         .as_secs();
     if now_seconds - state.0.last_disk_update.load(Ordering::Relaxed) >= 30 {
         debug!("Refreshing Disk usage");
-        state.0.disks.write().await.refresh(true);
-        state
-            .0
-            .last_disk_update
-            .store(now_seconds, Ordering::Relaxed);
+        if let Err(e) = state.0.disks.write().await.reload_disks().await {
+            error!("Failed to Update Disk Usage: {e:?}");
+        } else {
+            state
+                .0
+                .last_disk_update
+                .store(now_seconds, Ordering::Relaxed);
+        }
     }
     if now_seconds - state.0.last_net_update.load(Ordering::Relaxed) >= 5 {
         debug!("Refreshing Network usage");
@@ -716,10 +754,13 @@ pub async fn refresh_system_info(state: State<SystemMonitorPlugin>) -> Result<()
     let mut gpus = vec![];
     if let Some(nvml) = state.0.nvml.read().await.as_ref() {
         gpus.extend(SystemMonitorPlugin::get_nvidia_gpu_info(nvml));
+        debug!("Finished Nvidia GPU refresh");
     }
-    if SystemMonitorPlugin::has_amd_gpu_detection().await {
+    if state.0.detected_amd_gpu.load(Ordering::Relaxed) {
         gpus.extend(SystemMonitorPlugin::get_amd_gpu_info().await);
+        debug!("Finished AMD GPU refresh");
     }
     *state.0.gpus.write().await = gpus;
+    debug!("Refreshed System Values");
     Ok(())
 }

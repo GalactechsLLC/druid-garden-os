@@ -3,14 +3,13 @@ use crate::config::{
     DEFAULT_FULLNODE_WS_PORT,
 };
 use crate::legacy::PreloadConfig;
-use crate::plugins::disk_management::DiskManagerPlugin;
 use crate::plugins::farmer::{
     load_farmer_config, save_farmer_config, FarmerManager, FarmerStatus, HarvesterConfig,
 };
+use crate::plugins::system_monitor::{DiskInfo, SystemMonitorPlugin};
 use dg_fast_farmer::cli::commands::{generate_config_from_mnemonic, GenerateConfig};
-use dg_fast_farmer::farmer::config::Config;
+use dg_fast_farmer::farmer::config::{Config, MetricsConfig};
 use dg_fast_farmer::routes::FarmerPublicState;
-use dg_sysfs::classes::block::BlockDevice;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::protocols::farmer::FarmerStats;
 use log::{info, warn, Level};
@@ -21,6 +20,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
+use std::path::PathBuf;
 use std::str::FromStr;
 use time::OffsetDateTime;
 
@@ -119,21 +119,23 @@ pub async fn update_config(
 #[post("/farmer/config/scan", output = "json", eoutput = "bytes")]
 pub async fn scan_for_legacy_configs(
     pool: State<SqlitePool>,
-    disks: State<DiskManagerPlugin>,
+    system_monitor: State<SystemMonitorPlugin>,
 ) -> Result<Config<HarvesterConfig>, Error> {
-    let drives = disks.0.list_mounted().await?;
+    let drives: Vec<DiskInfo> = system_monitor
+        .0
+        .get_disk_info()
+        .await?
+        .into_iter()
+        .filter(|d| d.mount_path.is_some())
+        .collect();
     //Scan Mounted Devices for preload.pconf if found parse and generate a config,
     //we are only searching 1 level deep, pconfs should be at the root of the drive
     let mut current_config = load_farmer_config(pool.0.as_ref()).await?;
     let mut pconfs = vec![];
     for drive in drives {
-        let mount_path = match drive {
-            BlockDevice::Disk(d) => d.mount_path,
-            BlockDevice::Partition(p) => p.mount_path,
-            _ => continue,
-        };
-        match mount_path {
+        match &drive.mount_path {
             Some(mount_path) => {
+                let mount_path = PathBuf::from(mount_path);
                 for entry in mount_path.read_dir()? {
                     let preload_file = match entry {
                         Ok(entry) => {
@@ -216,7 +218,7 @@ pub async fn generate_from_mnemonic(
 ) -> Result<Config<HarvesterConfig>, Error> {
     match payload.inner() {
         Some(config) => {
-            let generated = generate_config_from_mnemonic::<HarvesterConfig>(
+            let mut generated = generate_config_from_mnemonic::<HarvesterConfig>(
                 GenerateConfig {
                     output_path: None,
                     mnemonic_file: None,
@@ -235,6 +237,11 @@ pub async fn generate_from_mnemonic(
                 false,
             )
             .await?;
+            generated.harvester_configs.custom_config = Some(HarvesterConfig::default());
+            generated.metrics = Some(MetricsConfig {
+                enabled: true,
+                port: 9090,
+            });
             save_farmer_config(pool.0.as_ref(), &generated).await?;
             Ok(generated)
         }

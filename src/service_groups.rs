@@ -1,4 +1,4 @@
-use crate::plugins::disk_management::{list_disks, mount, unmount};
+use crate::plugins::disk_management::{mount, unmount};
 use crate::plugins::file_manager::{
     create_directory, create_file, get_file, list_files, remove, rename, update_file,
 };
@@ -63,7 +63,6 @@ pub fn viewer_group() -> ServiceGroup {
         .service(plugin_updates)
         .service(refresh_plugins)
         .service(plugin_status)
-        .service(list_disks)
         .service(get_info)
         .service(get_cpu)
         .service(get_gpus)

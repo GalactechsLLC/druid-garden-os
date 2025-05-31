@@ -68,6 +68,7 @@ async fn main() -> Result<(), Error> {
     let config_manager = ConfigManager::new(&db).await?;
     info!("Setting Up System Monitor");
     let system_manager = SystemMonitorPlugin::new().await;
+    info!("Loading Network Information");
     let network_info = system_manager.get_network_info().await?;
     let ip_list = network_info.into_iter().fold(vec![], |mut r, v| {
         for a in v.ip_addresses {
