@@ -367,6 +367,8 @@ impl FarmerManager {
     ) -> Result<(), Error> {
         let mut url = Self::farmer_url(&self.database).await?;
         url.set_path(&format!("/log_stream/{level}"));
+        url.set_scheme(if url.scheme() == "https" { "wss" } else { "ws" })
+            .map_err(|_| Error::new(ErrorKind::InvalidInput, "Invalid URL"))?;
         let upstream_socket = new_websocket(url.as_str(), None).await?;
         let mut err = None;
         loop {
