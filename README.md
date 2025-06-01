@@ -25,7 +25,7 @@ This repository contains a Rust project integrated with custom Armbian build scr
 Ensure you have the following installed:
 - **Git**: For cloning the repository.
 - **Rust Toolchain**: Install via [rustup](https://rustup.rs/) if building the Rust application.
-- **Build Dependencies for Armbian**: Please refer to the [Armbian Build Documentation](https://docs.armbian.com/Developer-Guide_Build-Tools/) for a complete list.
+- **Build Dependencies for Armbian**: Please refer to the [Armbian Build Documentation](https://github.com/armbian/build) for a complete list.
 - **Balena Etcher**: Download from [balena.io/etcher](https://www.balena.io/etcher/) to flash the generated OS images.
 
 ## Build Scripts
