@@ -22,8 +22,7 @@ impl DiskManagerPlugin {
             .output()
             .await?;
         if !output.status.success() {
-            return Err(Error::new(
-                ErrorKind::Other,
+            return Err(Error::other(
                 String::from_utf8_lossy(&output.stderr).to_string(),
             ));
         }
@@ -43,8 +42,7 @@ impl DiskManagerPlugin {
             .output()
             .await?;
         if !output.status.success() {
-            return Err(Error::new(
-                ErrorKind::Other,
+            return Err(Error::other(
                 String::from_utf8_lossy(&output.stderr).to_string(),
             ));
         }

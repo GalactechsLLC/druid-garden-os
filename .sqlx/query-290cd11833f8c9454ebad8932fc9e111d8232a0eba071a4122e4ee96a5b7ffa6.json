@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT challenge_hash, sp_hash, running, og_passed_filter, og_plot_count,\n            nft_passed_filter, nft_plot_count, compressed_passed_filter, \n            compressed_plot_count, invalid_plot_count, proofs_found, total_plot_space,\n            full_node_height, full_node_difficulty, full_node_synced, gathered\n        FROM farmer_stats\n        WHERE gathered >= $1\n        AND gathered <= $2\n        ORDER BY gathered ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "challenge_hash",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "sp_hash",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "running",
+        "ordinal": 2,
+        "type_info": "Bool"
+      },
+      {
+        "name": "og_passed_filter",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "og_plot_count",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "nft_passed_filter",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "nft_plot_count",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "compressed_passed_filter",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "compressed_plot_count",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "invalid_plot_count",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "proofs_found",
+        "ordinal": 10,
+        "type_info": "Integer"
+      },
+      {
+        "name": "total_plot_space",
+        "ordinal": 11,
+        "type_info": "Integer"
+      },
+      {
+        "name": "full_node_height",
+        "ordinal": 12,
+        "type_info": "Integer"
+      },
+      {
+        "name": "full_node_difficulty",
+        "ordinal": 13,
+        "type_info": "Integer"
+      },
+      {
+        "name": "full_node_synced",
+        "ordinal": 14,
+        "type_info": "Bool"
+      },
+      {
+        "name": "gathered",
+        "ordinal": 15,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "290cd11833f8c9454ebad8932fc9e111d8232a0eba071a4122e4ee96a5b7ffa6"
+}

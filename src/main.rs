@@ -11,7 +11,7 @@ mod web;
 use crate::config::ConfigManager;
 use crate::models::ServerSettings;
 use crate::plugins::disk_management::DiskManagerPlugin;
-use crate::plugins::farmer::FarmerManager;
+use crate::plugins::farmer::{update_local_stats, FarmerManager};
 use crate::plugins::file_manager::FileManagerPlugin;
 use crate::plugins::system_monitor::{refresh_system_info, SystemMonitorPlugin};
 use crate::plugins::PluginManager;
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Error> {
     info!("Setting Up Auth");
     let basic_auth = BasicAuthHandle::new(db.clone(), argon.clone());
     info!("Setting Up Farmer Manager");
-    let farmer_manager = Arc::new(FarmerManager::new(&settings, db.clone()).await?);
+    let farmer_manager = Arc::new(FarmerManager::new(db.clone()).await?);
     info!("Setting Up Plugin Manager");
     let plugin_manager = PluginManager::new(&db, PathBuf::from(settings.plugin_path)).await;
     info!("Setting Up Config Manager");
@@ -138,6 +138,7 @@ async fn main() -> Result<(), Error> {
         .register(manager_group())
         .register(admin_group())
         .register(super_group())
+        .task(update_local_stats)
         .task(refresh_system_info);
     info!("Starting Services");
     let res = server.build().run().await;

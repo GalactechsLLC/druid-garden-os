@@ -39,10 +39,9 @@ pub struct UpdateInfo {
 pub async fn find_updates() -> Result<UpdateInfo, Error> {
     let client = Client::new();
     let manifest = fetch_manifest(&client).await?;
-    let remote_version =
-        Version::parse(&manifest.version).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    let remote_version = Version::parse(&manifest.version).map_err(Error::other)?;
     info!("Found Remote version: {}", remote_version);
-    let local_version = Version::parse(version()).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    let local_version = Version::parse(version()).map_err(Error::other)?;
     Ok(UpdateInfo {
         has_update: remote_version > local_version,
         remote_version,
@@ -54,10 +53,9 @@ pub async fn find_updates() -> Result<UpdateInfo, Error> {
 pub async fn do_updates() -> Result<String, Error> {
     let client = Client::new();
     let manifest = fetch_manifest(&client).await?;
-    let remote_version =
-        Version::parse(&manifest.version).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    let remote_version = Version::parse(&manifest.version).map_err(Error::other)?;
     info!("Found Remote version: {}", remote_version);
-    let local_version = Version::parse(version()).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    let local_version = Version::parse(version()).map_err(Error::other)?;
     if remote_version > local_version {
         run_update_service().await?;
         Ok("true".to_owned())
@@ -73,10 +71,10 @@ async fn run_update_service() -> Result<(), Error> {
         .status()
         .await?;
     if !status.success() {
-        return Err(Error::new(
-            ErrorKind::Other,
-            format!("Failed to Start Updater: {:?}", status),
-        ));
+        return Err(Error::other(format!(
+            "Failed to Start Updater: {:?}",
+            status
+        )));
     }
     Ok(())
 }

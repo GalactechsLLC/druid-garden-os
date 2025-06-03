@@ -10,7 +10,7 @@ use portfu::prelude::{serde_json, State};
 use portfu_macros::{get, interval};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -540,34 +540,20 @@ impl SystemMonitorPlugin {
             match n {
                 Device::Ethernet(dev) => {
                     debug!("Loading Wired Connection Info");
-                    let active_connection = dev
-                        .active_connection()
-                        .await
-                        .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+                    let active_connection = dev.active_connection().await.map_err(Error::other)?;
                     debug!("Loading Wired IpAddress Info");
                     let ip_addresses = match active_connection {
                         Some(active_connection) => {
-                            let ip_config = active_connection
-                                .ip4_config()
-                                .await
-                                .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
-                            ip_config
-                                .addresses()
-                                .await
-                                .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?
+                            let ip_config =
+                                active_connection.ip4_config().await.map_err(Error::other)?;
+                            ip_config.addresses().await.map_err(Error::other)?
                         }
                         None => Vec::with_capacity(0),
                     };
                     debug!("Loading Wired Mac Address Info");
-                    let mac_address = dev
-                        .hw_address()
-                        .await
-                        .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+                    let mac_address = dev.hw_address().await.map_err(Error::other)?;
                     debug!("Loading Wired Usage Stats");
-                    let statistics = dev
-                        .get_statistics()
-                        .await
-                        .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+                    let statistics = dev.get_statistics().await.map_err(Error::other)?;
                     debug!("Loading Wired Interface Name");
                     let interface_name = dev.interface().await?;
                     debug!("Found Interface Name: {interface_name}");
@@ -595,34 +581,20 @@ impl SystemMonitorPlugin {
                 }
                 Device::Wireless(dev) => {
                     debug!("Loading Wireless Connection Info");
-                    let active_connection = dev
-                        .active_connection()
-                        .await
-                        .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+                    let active_connection = dev.active_connection().await.map_err(Error::other)?;
                     debug!("Loading Wireless IpAddress Info");
                     let ip_addresses = match active_connection {
                         Some(active_connection) => {
-                            let ip_config = active_connection
-                                .ip4_config()
-                                .await
-                                .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
-                            ip_config
-                                .addresses()
-                                .await
-                                .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?
+                            let ip_config =
+                                active_connection.ip4_config().await.map_err(Error::other)?;
+                            ip_config.addresses().await.map_err(Error::other)?
                         }
                         None => Vec::with_capacity(0),
                     };
                     debug!("Loading Wireless Mac Address Info");
-                    let mac_address = dev
-                        .hw_address()
-                        .await
-                        .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+                    let mac_address = dev.hw_address().await.map_err(Error::other)?;
                     debug!("Loading Wireless Usage Stats");
-                    let statistics = dev
-                        .get_statistics()
-                        .await
-                        .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+                    let statistics = dev.get_statistics().await.map_err(Error::other)?;
                     debug!("Loading Wireless Interface Name");
                     let interface_name = dev.interface().await?;
                     debug!("Found Interface Name: {interface_name}");

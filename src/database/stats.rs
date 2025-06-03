@@ -15,18 +15,20 @@ pub async fn get_farmer_stats_range(
     let rows = sqlx::query_as!(
         FarmerStats,
         r#"
-        SELECT challenge_hash, sp_hash, running, og_plot_count, nft_plot_count, compresses_plot_count,
-               invalid_plot_count, total_plot_space, full_node_height, full_node_difficulty,
-               full_node_synced, gathered
+        SELECT challenge_hash, sp_hash, running, og_passed_filter, og_plot_count,
+            nft_passed_filter, nft_plot_count, compressed_passed_filter, 
+            compressed_plot_count, invalid_plot_count, proofs_found, total_plot_space,
+            full_node_height, full_node_difficulty, full_node_synced, gathered
         FROM farmer_stats
         WHERE gathered >= $1
         AND gathered <= $2
+        ORDER BY gathered ASC
         "#,
         start,
         end
     )
-        .fetch_all(pool)
-        .await;
+    .fetch_all(pool)
+    .await;
     match rows {
         Ok(rows) => {
             for row in rows {
@@ -35,6 +37,27 @@ pub async fn get_farmer_stats_range(
             Ok(results)
         }
         Err(sqlx::Error::RowNotFound) => Ok(results),
+        Err(e) => Err(map_sqlx_error(e)),
+    }
+}
+
+pub async fn prune_farmer_stats(
+    pool: &SqlitePool,
+    older_than: OffsetDateTime,
+) -> Result<(), Error> {
+    let rows = sqlx::query_as!(
+        FarmerStats,
+        r#"
+        DELETE FROM farmer_stats
+        WHERE gathered <= $1
+        "#,
+        older_than,
+    )
+    .execute(pool)
+    .await;
+    match rows {
+        Ok(_) => Ok(()),
+        Err(sqlx::Error::RowNotFound) => Ok(()),
         Err(e) => Err(map_sqlx_error(e)),
     }
 }
@@ -74,22 +97,26 @@ pub async fn save_farmer_stats(
     let q = sqlx::query!(
         r#"
         INSERT INTO farmer_stats (
-            challenge_hash, sp_hash, running, og_plot_count,
-            nft_plot_count, compresses_plot_count, invalid_plot_count,
-            total_plot_space, full_node_height, full_node_difficulty,
-            full_node_synced, gathered
+            challenge_hash, sp_hash, running, og_passed_filter, og_plot_count,
+            nft_passed_filter, nft_plot_count, compressed_passed_filter, 
+            compressed_plot_count, invalid_plot_count, proofs_found, total_plot_space,
+            full_node_height, full_node_difficulty, full_node_synced, gathered
         )
-        VALUES ( $1, $2, $3,  $4,
+        VALUES ( $1, $2, $3, $4,
                  $5, $6, $7,
                  $8, $9, $10,
-                 $11, $12
+                 $11, $12, $13, $14, $15, $16
         )
         ON CONFLICT(challenge_hash, sp_hash) DO UPDATE SET
             running               = excluded.running,
+            og_passed_filter      = excluded.og_passed_filter,
             og_plot_count         = excluded.og_plot_count,
+            nft_passed_filter     = excluded.nft_passed_filter,
             nft_plot_count        = excluded.nft_plot_count,
-            compresses_plot_count = excluded.compresses_plot_count,
+            compressed_passed_filter = excluded.compressed_passed_filter,
+            compressed_plot_count = excluded.compressed_plot_count,
             invalid_plot_count    = excluded.invalid_plot_count,
+            proofs_found          = excluded.proofs_found,
             total_plot_space      = excluded.total_plot_space,
             full_node_height      = excluded.full_node_height,
             full_node_difficulty  = excluded.full_node_difficulty,
@@ -99,10 +126,14 @@ pub async fn save_farmer_stats(
         challenge_hash,
         sp_hash,
         farmer_stats.running,
+        farmer_stats.og_passed_filter,
         farmer_stats.og_plot_count,
+        farmer_stats.nft_passed_filter,
         farmer_stats.nft_plot_count,
-        farmer_stats.compresses_plot_count,
+        farmer_stats.compressed_passed_filter,
+        farmer_stats.compressed_plot_count,
         farmer_stats.invalid_plot_count,
+        farmer_stats.proofs_found,
         farmer_stats.total_plot_space,
         farmer_stats.full_node_height,
         farmer_stats.full_node_difficulty,

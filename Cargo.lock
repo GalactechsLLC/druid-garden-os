@@ -991,9 +991,9 @@ dependencies = [
 
 [[package]]
 name = "dg_fast_farmer"
-version = "2.0.1"
+version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46e71f1f83c5c70f929cbae76582660ff4dea8301c0bea88b862346c7db94014"
+checksum = "f7ac29948c975b4e6a3998bfc6087902fce6834243c813cd6c8f7089bbb751f5"
 dependencies = [
  "async-trait",
  "bip39",
@@ -1033,9 +1033,9 @@ dependencies = [
 
 [[package]]
 name = "dg_logger"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0a411d30991d28918df58341f3f486d97b8f62ccc6dc875894a1c14ae605171"
+checksum = "5627d2c14034722e239ac8080c2640d150ce1e2319090da8bcd7272a9e420b5f"
 dependencies = [
  "colored 3.0.0",
  "log",
@@ -1073,9 +1073,9 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_cli"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70712678c19ed5b1e81740a10e86c65f9cc7a4cd4968632cc4f0a23d3e5dcf8b"
+checksum = "4ac104fc4435eab3b04387512f1551d2a038efc93e201f7e63ba3210098fe777"
 dependencies = [
  "async-trait",
  "bip39",
@@ -1101,9 +1101,9 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_clients"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4a30fed4f0d518e17bc9a352b389d322cfe102b76ee0d0ac01c22cb401065f5"
+checksum = "2c292c557e44bca19aca00ee28b3e7688db3e21831e82dba3b2403c372bea399"
 dependencies = [
  "async-trait",
  "blst",
@@ -1127,9 +1127,9 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_core"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0789333d848e8d0bdf5525dc8281fee50ef27ee053e78c7b4b82fe0178e69a2"
+checksum = "7f540da9756f7addec1f98d97dbcae7759fc74e2ca0123c8757c9bcbb1ee1015"
 dependencies = [
  "async-trait",
  "bls12_381",
@@ -1170,9 +1170,9 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_keys"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63b1ac1d358fdeb4fca93b130b0036811ed2990207ee957302b0b33fd388d122"
+checksum = "fc44beacc14b287cc1a403cae95f0274e43fe2bef45ca6fba69a5851fb06e124"
 dependencies = [
  "bech32",
  "bip39",
@@ -1186,9 +1186,9 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_macros"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92da53a098f638124cacda3d08b4f7960e1b4197170c2afd76eecf4c030cbcff"
+checksum = "40882882682293d2fa508a610e2fa4a19d3f8a18774c2335cf2e41afb9e6e1b0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1197,9 +1197,9 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_pos"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9de89548f0152e4c10cae5b0dabed7099aa85de0fe210d26ad6d8682af26d178"
+checksum = "6cfff7a04e3a1da6238168cea766730e254d7a36ab6abbc2debe1ade18861c36"
 dependencies = [
  "async-trait",
  "blake3",
@@ -1222,9 +1222,9 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_puzzles"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "121b1cba42e51f6f9657b6220eeb178a6e5dba840edc1e53405ce1e2b7a93be1"
+checksum = "4169e01b83b4e09cb26ed21e57d7d72c4e77201af446051c9420d7e6a008d49e"
 dependencies = [
  "blst",
  "dg_xch_core",
@@ -1239,9 +1239,9 @@ dependencies = [
 
 [[package]]
 name = "dg_xch_serialize"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ef529e52f99c9ca999c60a7952a1a954e621888c906f968f762741ffbdef798"
+checksum = "ed050a5d24134368bbd217fd07e66d4c68ad2d22b7dec8ddcdf3cc5ddc3b8e01"
 dependencies = [
  "log",
  "serde",
@@ -2757,9 +2757,9 @@ dependencies = [
 
 [[package]]
 name = "portfu"
-version = "1.3.0"
+version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02b5b9e5bfa33ef8f11d2508629cc6eb1da8fd3e2250b2fb37a9a8f2dcecbbf0"
+checksum = "9b3a74a64b6971f0a87b8440bbf92d6eb45bf162f8b3f96b756b88a96250005a"
 dependencies = [
  "async-trait",
  "cookie",
@@ -2788,9 +2788,9 @@ dependencies = [
 
 [[package]]
 name = "portfu_admin"
-version = "1.3.0"
+version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb054a3ab04d86b3c20b82254e2ffbf479c658823b412f99f84d999909f3e56a"
+checksum = "0b69cb43350fe0b5c6893286341350b770463ef4e1a166656b232d42710feaff"
 dependencies = [
  "dashmap 5.5.3",
  "http",
@@ -2810,9 +2810,9 @@ dependencies = [
 
 [[package]]
 name = "portfu_core"
-version = "1.3.0"
+version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4014a6f58450a016dcf1fee666500a0141becc9a553764be57499ed7283f162a"
+checksum = "6f9ce55367d1c22be650653699dee8b53b66c5199f6736239a2c32cf595e7dbd"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -2846,9 +2846,9 @@ dependencies = [
 
 [[package]]
 name = "portfu_macros"
-version = "1.3.0"
+version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "823543a13ad145e0178dbd9cb36079ca4f0f05df7ea20eb4b45b05a14f9f1d61"
+checksum = "c01e0b1bae6e45b6f4b7d93023ebb12bedcd9fffc3fcdefbcac1ea8c1894f24d"
 dependencies = [
  "async-trait",
  "http",

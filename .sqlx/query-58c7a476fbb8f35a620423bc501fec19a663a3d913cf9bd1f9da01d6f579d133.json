@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO farmer_stats (\n            challenge_hash, sp_hash, running, og_passed_filter, og_plot_count,\n            nft_passed_filter, nft_plot_count, compressed_passed_filter, \n            compressed_plot_count, invalid_plot_count, proofs_found, total_plot_space,\n            full_node_height, full_node_difficulty, full_node_synced, gathered\n        )\n        VALUES ( $1, $2, $3, $4,\n                 $5, $6, $7,\n                 $8, $9, $10,\n                 $11, $12, $13, $14, $15, $16\n        )\n        ON CONFLICT(challenge_hash, sp_hash) DO UPDATE SET\n            running               = excluded.running,\n            og_passed_filter      = excluded.og_passed_filter,\n            og_plot_count         = excluded.og_plot_count,\n            nft_passed_filter     = excluded.nft_passed_filter,\n            nft_plot_count        = excluded.nft_plot_count,\n            compressed_passed_filter = excluded.compressed_passed_filter,\n            compressed_plot_count = excluded.compressed_plot_count,\n            invalid_plot_count    = excluded.invalid_plot_count,\n            proofs_found          = excluded.proofs_found,\n            total_plot_space      = excluded.total_plot_space,\n            full_node_height      = excluded.full_node_height,\n            full_node_difficulty  = excluded.full_node_difficulty,\n            full_node_synced      = excluded.full_node_synced,\n            gathered              = excluded.gathered\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 16
+    },
+    "nullable": []
+  },
+  "hash": "58c7a476fbb8f35a620423bc501fec19a663a3d913cf9bd1f9da01d6f579d133"
+}
