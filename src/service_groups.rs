@@ -9,11 +9,7 @@ use crate::web::auth::{
     register_endpoint, user_requires_password_update, user_update_password, BasicAuthHandle,
 };
 use crate::web::config::{config_entry, configs, del_config, upload_config};
-use crate::web::farmer::{
-    farmer_log_stream, farmer_status, generate_from_mnemonic, get_config, get_farmer_metrics,
-    get_farmer_stats, get_farmer_stats_range, is_config_ready, restart_farmer,
-    scan_for_legacy_configs, start_farmer, stop_farmer, update_config,
-};
+use crate::web::farmer::{farmer_log_stream, farmer_status, generate_from_mnemonic, get_config, get_farmer_metrics, get_farmer_state, get_farmer_stats, get_farmer_stats_range, is_config_ready, restart_farmer, scan_for_legacy_configs, start_farmer, stop_farmer, update_config};
 use crate::web::plugins::{
     add_plugin, all_plugins, available_plugins, del_plugin, del_plugin_environment_value,
     get_plugin_environment, get_plugin_environment_value, plugin, plugin_status, plugin_updates,
@@ -50,6 +46,7 @@ pub fn viewer_group() -> ServiceGroup {
         .service(farmer_status)
         .service(get_farmer_metrics)
         .service(get_farmer_stats)
+        .service(get_farmer_state)
         .service(get_farmer_stats_range)
         .service(farmer_log_stream {
             peers: Default::default(),
