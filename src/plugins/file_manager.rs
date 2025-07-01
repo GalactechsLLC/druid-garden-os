@@ -65,7 +65,7 @@ impl FileManagerPlugin {
             let file_type = entry.file_type().await?;
             let path_buf = entry.path();
             let path = path_buf.to_string_lossy().to_string();
-            debug!("Found entry: {}", path);
+            debug!("Found entry: {path}");
             let (entry_type, size) = if file_type.is_dir() {
                 if self.problematic_paths.read().await.contains(&path_buf) {
                     continue;
@@ -83,7 +83,7 @@ impl FileManagerPlugin {
             } else {
                 (EntryType::Unknown, 0)
             };
-            debug!("Entry Type: {:?}", entry_type);
+            debug!("Entry Type: {entry_type:?}");
             entries.push(FileEntry {
                 path,
                 entry_type,

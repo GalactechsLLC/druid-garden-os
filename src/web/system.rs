@@ -40,7 +40,7 @@ pub async fn find_updates() -> Result<UpdateInfo, Error> {
     let client = Client::new();
     let manifest = fetch_manifest(&client).await?;
     let remote_version = Version::parse(&manifest.version).map_err(Error::other)?;
-    info!("Found Remote version: {}", remote_version);
+    info!("Found Remote version: {remote_version}");
     let local_version = Version::parse(version()).map_err(Error::other)?;
     Ok(UpdateInfo {
         has_update: remote_version > local_version,
@@ -54,7 +54,7 @@ pub async fn do_updates() -> Result<String, Error> {
     let client = Client::new();
     let manifest = fetch_manifest(&client).await?;
     let remote_version = Version::parse(&manifest.version).map_err(Error::other)?;
-    info!("Found Remote version: {}", remote_version);
+    info!("Found Remote version: {remote_version}");
     let local_version = Version::parse(version()).map_err(Error::other)?;
     if remote_version > local_version {
         run_update_service().await?;
@@ -72,8 +72,7 @@ async fn run_update_service() -> Result<(), Error> {
         .await?;
     if !status.success() {
         return Err(Error::other(format!(
-            "Failed to Start Updater: {:?}",
-            status
+            "Failed to Start Updater: {status:?}"
         )));
     }
     Ok(())
@@ -125,7 +124,7 @@ pub async fn wifi_scan(pool: State<SqlitePool>) -> Result<Vec<AccessPoint>, Erro
         }),
         None => Err(Error::new(
             ErrorKind::NotFound,
-            format!("Failed to find device with name: {}", wireless_device_name),
+            format!("Failed to find device with name: {wireless_device_name}"),
         )),
     }
 }
@@ -171,7 +170,7 @@ pub async fn wifi_connect(
                 }
                 None => Err(Error::new(
                     ErrorKind::NotFound,
-                    format!("Failed to find device with name: {}", wireless_device_name),
+                    format!("Failed to find device with name: {wireless_device_name}"),
                 )),
             }
         }

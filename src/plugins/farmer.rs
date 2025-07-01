@@ -187,7 +187,7 @@ impl FarmerManager {
                 match manifest.beta_version {
                     Some(beta_version) => {
                         if beta_version != manifest.current_version {
-                            info!("Remote Beta Version: {}", beta_version);
+                            info!("Remote Beta Version: {beta_version}");
                         } else {
                             info!("No Beta Version Available");
                         }

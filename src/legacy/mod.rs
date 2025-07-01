@@ -17,6 +17,6 @@ impl TryFrom<&Path> for PreloadConfig {
 
     fn try_from(value: &Path) -> Result<Self, Self::Error> {
         serde_json::from_str::<PreloadConfig>(&fs::read_to_string(value)?)
-            .map_err(|e| std::io::Error::other(format!("{:?}", e)))
+            .map_err(|e| std::io::Error::other(format!("{e:?}")))
     }
 }

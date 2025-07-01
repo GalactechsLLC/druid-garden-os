@@ -32,7 +32,7 @@ pub async fn create_pool(database_path: &str) -> Result<SqlitePool, Error> {
         .max_connections(50)
         .connect_with(connect_opts)
         .await
-        .map_err(|e| Error::other(format!("Failed to connect to SQLite database: {}", e)))
+        .map_err(|e| Error::other(format!("Failed to connect to SQLite database: {e}")))
 }
 
 pub fn create_argon() -> Result<Argon2<'static>, Error> {
@@ -41,7 +41,7 @@ pub fn create_argon() -> Result<Argon2<'static>, Error> {
         Version::V0x13,
         //https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#argon2id
         Params::new(47104, 1, 1, Some(32))
-            .map_err(|e| Error::other(format!("Invalid Argon params: {}", e)))?,
+            .map_err(|e| Error::other(format!("Invalid Argon params: {e}")))?,
     ))
 }
 
@@ -54,7 +54,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), Error> {
 
 pub fn connect_to_docker() -> Result<Docker, Error> {
     Docker::connect_with_defaults()
-        .map_err(|e| Error::other(format!("Failed to connect to docker: {}", e)))
+        .map_err(|e| Error::other(format!("Failed to connect to docker: {e}")))
 }
 
 pub fn find_index_service(static_files: &ServiceGroup) -> Option<Service> {
@@ -79,14 +79,14 @@ pub async fn has_internet_connection() -> bool {
     ];
     let mut connection_established = false;
     for &address in &endpoints {
-        debug!("Attempting to connect to {}...", address);
+        debug!("Attempting to connect to {address}...");
         if let Ok(Ok(_stream)) = timeout(Duration::from_secs(5), TcpStream::connect(address)).await
         {
-            debug!("Successfully connected via {}!", address);
+            debug!("Successfully connected via {address}!");
             connection_established = true;
             break;
         } else {
-            warn!("Connection to {} failed.", address);
+            warn!("Connection to {address} failed.");
         }
     }
     if !connection_established {
@@ -169,7 +169,7 @@ pub async fn perform_startup_checks(
                     .await
                     .is_ok()
                     {
-                        info!("Started Hotspot on SSID: {}", hotspot_ssid);
+                        info!("Started Hotspot on SSID: {hotspot_ssid}");
                     }
                 }
                 None => {
@@ -189,7 +189,7 @@ pub async fn perform_startup_checks(
                             .await
                             .is_ok()
                             {
-                                info!("Started Hotspot on SSID: {}", hotspot_ssid);
+                                info!("Started Hotspot on SSID: {hotspot_ssid}");
                                 break;
                             }
                         }

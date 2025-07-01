@@ -246,13 +246,13 @@ impl SystemMonitorPlugin {
     }
     fn get_nvidia_gpu_info(nvml: &Nvml) -> Vec<GpuInfo> {
         let count = nvml.device_count().unwrap_or_default();
-        debug!("Detected {} NVIDIA GPU(s)", count);
+        debug!("Detected {count} NVIDIA GPU(s)");
         let mut gpus = vec![];
         for device_id in 0..count {
             match nvml.device_by_index(device_id) {
                 Ok(device) => {
                     let name = device.name().unwrap_or("Unknown".to_string());
-                    debug!("Loading GPU {}: {}", device_id, name);
+                    debug!("Loading GPU {device_id}: {name}");
                     match device.utilization_rates() {
                         Ok(utilization) => {
                             let mut fan_speeds = vec![];
@@ -323,7 +323,7 @@ impl SystemMonitorPlugin {
                         match serde_json::from_str::<Vec<AmdGPUInfo>>(&clean_string) {
                             Ok(data) => data,
                             Err(e) => {
-                                error!("Failed to parse amd-smi static output: {}", e);
+                                error!("Failed to parse amd-smi static output: {e}");
                                 return vec![];
                             }
                         }
@@ -402,7 +402,7 @@ impl SystemMonitorPlugin {
                         })
                         .collect(),
                     Err(e) => {
-                        error!("Failed to parse amd-smi metric output: {}", e);
+                        error!("Failed to parse amd-smi metric output: {e}");
                         vec![]
                     }
                 }

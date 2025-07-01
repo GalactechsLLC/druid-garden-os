@@ -93,7 +93,7 @@ pub async fn farmer_log_stream(
     let level = Level::from_str(level.as_str()).map_err(|e| {
         Error::new(
             ErrorKind::InvalidInput,
-            format!("{} is not a valid Log Level: {e:?}", level),
+            format!("{level} is not a valid Log Level: {e:?}"),
         )
     })?;
     farmer_manager.0.farmer_log_stream(level, socket).await
@@ -175,7 +175,7 @@ pub async fn scan_for_legacy_configs(
                 info!("Skipping existing launcher ID");
                 continue;
             } else {
-                info!("Found new PreConfig for launcher ID {}", pre_launcher_id);
+                info!("Found new PreConfig for launcher ID {pre_launcher_id}");
                 let generated = generate_config_from_mnemonic::<HarvesterConfig>(
                     GenerateConfig {
                         output_path: None,
