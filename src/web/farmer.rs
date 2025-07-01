@@ -42,8 +42,10 @@ pub async fn get_farmer_metrics(farmer_manager: State<FarmerManager>) -> Result<
 }
 
 #[get("/farmer/stats", output = "json", eoutput = "bytes")]
-pub async fn get_farmer_stats(db_pool: State<SqlitePool>) -> Result<Vec<FarmerStats>, Error> {
-    FarmerManager::recent_farmer_stats(&db_pool.0).await
+pub async fn get_farmer_stats(
+    farmer_manager: State<FarmerManager>,
+) -> Result<Vec<FarmerStats>, Error> {
+    farmer_manager.0.recent_farmer_stats().await
 }
 
 #[get("/farmer/state", output = "json", eoutput = "bytes")]

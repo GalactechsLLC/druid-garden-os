@@ -1059,9 +1059,9 @@ dependencies = [
 
 [[package]]
 name = "dg_sysfs"
-version = "1.1.0"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "469c6f3301aad2d3ee92ecfad179bacaa49d7f344f815f64211ceb78b160ef5a"
+checksum = "32cf384e48a1215d531765a422c3390cad60ec49968a18ea153915f0ff855535"
 dependencies = [
  "dg_logger",
  "libc",
@@ -1292,7 +1292,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "druid-garden-os"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "argon2",
  "bollard",

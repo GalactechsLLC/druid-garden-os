@@ -73,8 +73,8 @@ async fn main() -> Result<(), Error> {
     let ip_list = network_info.into_iter().fold(vec![], |mut r, v| {
         for a in v.ip_addresses {
             let address = a.address.to_string();
-            r.push(format!("http://{}:8080", address));
-            r.push(format!("http://{}:8443", address));
+            r.push(format!("http://{address}:8080"));
+            r.push(format!("http://{address}:8443"));
             r.push(address);
         }
         r

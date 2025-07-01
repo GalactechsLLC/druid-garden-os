@@ -1,6 +1,6 @@
 [package]
 name = "druid-garden-os"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 
 [lib]
@@ -18,7 +18,7 @@ dg_edge_updater = { version = "1.0.0" }
 dg_fast_farmer = { version = "2.0.2" }
 dg_xch_core = { version="2.1.2" }
 dg_logger = { version="2.1.2" }
-dg_sysfs = { version = "1.1.0" }
+dg_sysfs = { version = "1.1.1"}
 dg_network_manager = { version = "1.0.0" }
 home = "0.5.11"
 infer = "0.19.0"

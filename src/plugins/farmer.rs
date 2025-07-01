@@ -148,7 +148,7 @@ pub enum UpdateChannel {
     Beta,
 }
 
-const FAST_FARMER_MANIFEST_URL: &str = "https://builds.druid.garden/fast_farmer.yaml";
+const FAST_FARMER_MANIFEST_URL: &str = "https://builds.druid.garden/manifest.yaml";
 const BIN_PATH: &str = "/usr/bin/fast_farmer_gh.app";
 const BACKUP_PATH: &str = "/usr/bin/fast_farmer_gh.app.bak";
 const TMP_PATH: &str = "/tmp/fast_farmer_gh.app";
@@ -165,14 +165,51 @@ pub struct FarmerManager {
     instance: Arc<RwLock<Option<Child>>>,
     install_mutex: Mutex<()>,
     database: SqlitePool,
+    client: Client,
 }
 impl FarmerManager {
     pub async fn new(database: SqlitePool) -> Result<FarmerManager, Error> {
+        let client = Client::new();
+        let bin_path = Path::new(BIN_PATH);
+        let current_version = Self::get_binary_version(bin_path).await;
+        match current_version {
+            Some(current_version) => {
+                info!("Found Binary Version: {}", &current_version);
+            }
+            None => {
+                info!("No Binary Version Installed");
+            }
+        }
+        match Self::fetch_manifest(&client).await {
+            Ok(manifest) => {
+                info!("Found Farmer Manifest");
+                info!("Remote Version: {}", manifest.current_version);
+                match manifest.beta_version {
+                    Some(beta_version) => {
+                        if beta_version != manifest.current_version {
+                            info!("Remote Beta Version: {}", beta_version);
+                        } else {
+                            info!("No Beta Version Available");
+                        }
+                    }
+                    None => {
+                        info!("No Beta Version Available");
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to fetch Farmer Manifest: {e:?}");
+            }
+        }
         Ok(Self {
+            client,
             instance: Arc::new(RwLock::new(None)),
             install_mutex: Mutex::new(()),
             database,
         })
+    }
+    pub async fn is_running(&self) -> bool {
+        self.instance.read().await.is_some()
     }
     pub async fn ensure_installed(&self) -> Result<(), Error> {
         let bin_path = Path::new(BIN_PATH);
@@ -185,10 +222,9 @@ impl FarmerManager {
     pub async fn update_farmer(&self) -> Result<(), Error> {
         info!("Checking for Farmer Installation");
         let install_mutex = self.install_mutex.lock().await;
-        let client = Client::new();
         let bin_path = Path::new(BIN_PATH);
         info!("Fetching Remote Manifest");
-        let current_manifest = Self::fetch_manifest(&client).await?;
+        let current_manifest = Self::fetch_manifest(&self.client).await?;
         let channel = match get_config_key(&self.database, "farmer_update_channel").await {
             Ok(Some(channel_entry)) => match channel_entry.value.to_ascii_lowercase().as_str() {
                 "beta" => UpdateChannel::Beta,
@@ -227,7 +263,7 @@ impl FarmerManager {
                     .unwrap_or(current_manifest.current_version),
             };
             let download_url = Self::get_download_url(&version.to_string())?;
-            Self::download_file(&client, TMP_PATH, &download_url).await?;
+            Self::download_file(&self.client, TMP_PATH, &download_url).await?;
             Self::set_executable_bit(TMP_PATH).await?;
 
             // Verify downloaded binary
@@ -443,11 +479,10 @@ impl FarmerManager {
                 )
             })
     }
-    pub async fn recent_farmer_stats(database: &SqlitePool) -> Result<Vec<FarmerStats>, Error> {
-        let client = reqwest::Client::new();
-        let mut url = Self::farmer_url(database).await?;
+    pub async fn recent_farmer_stats(&self) -> Result<Vec<FarmerStats>, Error> {
+        let mut url = Self::farmer_url(&self.database).await?;
         url.set_path("/stats");
-        client
+        self.client
             .get(url)
             .send()
             .await
@@ -541,21 +576,28 @@ impl Drop for FarmerManager {
 }
 
 #[interval(10_000)]
-pub async fn update_local_stats(database: State<SqlitePool>) -> Result<(), Error> {
-    let mut url = FarmerManager::farmer_url(&database).await?;
-    url.set_path("/stats");
-    let stats = FarmerManager::recent_farmer_stats(&database).await?;
-    for farmer_stats in stats {
-        if !has_farmer_stats(&database, farmer_stats.challenge_hash, farmer_stats.sp_hash).await? {
-            save_farmer_stats(&database, farmer_stats).await?;
+pub async fn update_local_stats(
+    database: State<SqlitePool>,
+    farmer_manager: State<FarmerManager>,
+) -> Result<(), Error> {
+    if farmer_manager.0.is_running().await {
+        let mut url = FarmerManager::farmer_url(&database).await?;
+        url.set_path("/stats");
+        let stats = farmer_manager.0.recent_farmer_stats().await?;
+        for farmer_stats in stats {
+            if !has_farmer_stats(&database, farmer_stats.challenge_hash, farmer_stats.sp_hash)
+                .await?
+            {
+                save_farmer_stats(&database, farmer_stats).await?;
+            }
         }
+        let mut older_than_timestamp = OffsetDateTime::now_utc();
+        let stat_days_to_keep = get_config_key(&database, "stats_days_saved")
+            .await?
+            .map(|c| u64::from_str(&c.value).unwrap_or(30))
+            .unwrap_or(30);
+        older_than_timestamp -= Duration::new(stat_days_to_keep * 24 * 60 * 60, 0);
+        prune_farmer_stats(&database, older_than_timestamp).await?;
     }
-    let mut older_than_timestamp = OffsetDateTime::now_utc();
-    let stat_days_to_keep = get_config_key(&database, "stats_days_saved")
-        .await?
-        .map(|c| u64::from_str(&c.value).unwrap_or(30))
-        .unwrap_or(30);
-    older_than_timestamp -= Duration::new(stat_days_to_keep * 24 * 60 * 60, 0);
-    prune_farmer_stats(&database, older_than_timestamp).await?;
     Ok(())
 }
