@@ -1,6 +1,7 @@
 mod config;
 mod database;
 mod first_run;
+mod gpio;
 mod legacy;
 mod models;
 mod plugins;
@@ -13,6 +14,7 @@ use crate::models::ServerSettings;
 use crate::plugins::disk_management::DiskManagerPlugin;
 use crate::plugins::farmer::{update_local_stats, FarmerManager};
 use crate::plugins::file_manager::FileManagerPlugin;
+use crate::plugins::led_manager::LedManager;
 use crate::plugins::system_monitor::{refresh_system_info, SystemMonitorPlugin};
 use crate::plugins::PluginManager;
 use crate::service_groups::{
@@ -65,7 +67,7 @@ async fn main() -> Result<(), Error> {
     info!("Setting Up Plugin Manager");
     let plugin_manager = PluginManager::new(&db, PathBuf::from(settings.plugin_path)).await;
     info!("Setting Up Config Manager");
-    let config_manager = ConfigManager::new(&db).await?;
+    let config_manager = Arc::new(RwLock::new(ConfigManager::new(&db).await?));
     info!("Setting Up System Monitor");
     let system_manager = SystemMonitorPlugin::new().await;
     info!("Loading Network Information");
@@ -83,6 +85,10 @@ async fn main() -> Result<(), Error> {
     let file_manager = FileManagerPlugin::new();
     info!("Setting Up Disk Manager");
     let disk_manager = DiskManagerPlugin::new();
+    info!("Setting Up Disk Manager");
+    let led_manager = Arc::new(RwLock::new(
+        LedManager::init(config_manager.clone(), db.clone()).await?,
+    ));
     info!("Setting Up Static HTML Files");
     let static_files: ServiceGroup = ServiceGroup::from(druid_garden_os::HtmlFiles {});
     let index_service = find_index_service(&static_files).expect("Failed to find index service");
@@ -91,6 +97,7 @@ async fn main() -> Result<(), Error> {
         .host(settings.hostname)
         .port(settings.port)
         .shared_state(RwLock::new(plugin_manager))
+        .shared_state::<RwLock<LedManager>>(led_manager.clone())
         .shared_state::<DruidGardenLogger>(logger)
         .shared_state(argon)
         .shared_state(docker)
@@ -99,7 +106,7 @@ async fn main() -> Result<(), Error> {
         .shared_state::<FarmerManager>(farmer_manager.clone())
         .shared_state(file_manager)
         .shared_state(disk_manager)
-        .shared_state(RwLock::new(config_manager))
+        .shared_state::<RwLock<ConfigManager>>(config_manager)
         .default_service(index_service)
         .wrap(Arc::new(Cors::new(
             [
@@ -144,6 +151,7 @@ async fn main() -> Result<(), Error> {
     let res = server.build().run().await;
     info!("Shutting Down");
     farmer_manager.stop_farmer().await?;
+    let _ = led_manager.write().await.stop_all().await;
     info!("Farmer Stopped");
     res
 }

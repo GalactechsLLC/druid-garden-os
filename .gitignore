@@ -6,3 +6,4 @@ target/
 builds
 build_output
 /plugins/
+/bin_builds

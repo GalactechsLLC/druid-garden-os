@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 pub mod config;
 pub mod database;
 pub mod first_run;
+pub mod gpio;
 pub mod legacy;
 pub mod models;
 pub mod plugins;

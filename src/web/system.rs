@@ -71,9 +71,7 @@ async fn run_update_service() -> Result<(), Error> {
         .status()
         .await?;
     if !status.success() {
-        return Err(Error::other(format!(
-            "Failed to Start Updater: {status:?}"
-        )));
+        return Err(Error::other(format!("Failed to Start Updater: {status:?}")));
     }
     Ok(())
 }

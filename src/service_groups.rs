@@ -14,7 +14,9 @@ use crate::web::farmer::{
     get_farmer_stats, get_farmer_stats_range, is_config_ready, restart_farmer,
     scan_for_legacy_configs, start_farmer, stop_farmer, update_config,
 };
-use crate::web::leds::{set_color_mode, set_pin_mode};
+use crate::web::leds::{
+    get_brightness, get_pin_value, set_brightness, set_color_mode, set_pin_mode,
+};
 use crate::web::plugins::{
     add_plugin, all_plugins, available_plugins, del_plugin, del_plugin_environment_value,
     get_plugin_environment, get_plugin_environment_value, plugin, plugin_status, plugin_updates,
@@ -78,6 +80,9 @@ pub fn editor_group() -> ServiceGroup {
     ServiceGroup::default()
         .service(set_pin_mode)
         .service(set_color_mode)
+        .service(get_pin_value)
+        .service(set_brightness)
+        .service(get_brightness)
         .service(do_updates)
         .service(wifi_scan)
         .service(wifi_connect)

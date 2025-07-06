@@ -233,9 +233,7 @@ impl WrapperFn for PasswordUpdateWrapper {
     async fn before(&self, data: &mut ServiceData) -> WrapperResult {
         match State::<RwLock<Session>>::from_request(&mut data.request, "update_required").await {
             Err(e) => {
-                warn!(
-                    "Failed to Find User Session for Password Update Redirect: {e:?}"
-                );
+                warn!("Failed to Find User Session for Password Update Redirect: {e:?}");
                 WrapperResult::Continue
             }
             Ok(session) => match session.0.read().await.data.get::<RequireUpdate>() {
