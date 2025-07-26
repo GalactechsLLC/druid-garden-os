@@ -1,7 +1,8 @@
 use crate::config::ConfigManager;
 use crate::models::config::AddConfigEntry;
 use crate::plugins::system_monitor::{DiskInfo, SystemMonitorPlugin};
-use log::error;
+use dg_sysfs::classes::block::disk::FileSystem;
+use log::{error, warn};
 use portfu::prelude::State;
 use portfu_core::Json;
 use portfu_macros::{interval, post};
@@ -102,53 +103,58 @@ pub async fn mount(
         Some(params) => {
             //Confirm we know about the disk they want to mount
             let known_disks = system_monitor.0.get_disk_info().await?;
-            //First Check Disks, then Check Partitions
-            let mount_name = match known_disks
-                .iter()
-                .find(|d| d.dev_path == params.device_path)
-            {
-                Some(disk) => Some(disk.name.clone()),
-                None => {
-                    let mut value = None;
-                    for disk in known_disks {
-                        let path_buf = Path::new(&params.device_path);
-                        value = disk
-                            .partitions
-                            .into_iter()
-                            .find(|p| p.device == path_buf)
-                            .map(|p| p.name.clone());
-                        if value.is_some() {
-                            break;
-                        }
-                    }
-                    value
+            let mut uuid = None;
+            let path_buf = Path::new(&params.device_path);
+            for disk in known_disks {
+                if let Some(partition) = disk.partitions.into_iter().find(|p| p.device == path_buf)
+                {
+                    uuid = match partition.file_system {
+                        None => partition.uuid,
+                        Some(file_system) => match file_system {
+                            FileSystem::Btrfs(uuid)
+                            | FileSystem::ExFAT(uuid)
+                            | FileSystem::Ext2(uuid)
+                            | FileSystem::Ext3(uuid)
+                            | FileSystem::Ext4(uuid)
+                            | FileSystem::F2FS(uuid)
+                            | FileSystem::FAT12(uuid)
+                            | FileSystem::FAT16(uuid)
+                            | FileSystem::FAT32(uuid)
+                            | FileSystem::JFS(uuid)
+                            | FileSystem::NTFS(uuid)
+                            | FileSystem::ReiserFS(uuid)
+                            | FileSystem::XFS(uuid) => Some(uuid),
+                            FileSystem::ISO9660 | FileSystem::Unknown => partition.uuid,
+                        },
+                    };
+                    break;
                 }
             }
-            .ok_or(Error::new(
-                ErrorKind::NotFound,
-                format!(
-                    "Failed to find disk with Device Path: {}",
-                    params.device_path
-                ),
-            ))?;
             if params.auto_mount.unwrap_or(false) {
-                //Drive is set to auto mount
-                let key = format!("auto-mount-{mount_name}");
-                config
-                    .write()
-                    .await
-                    .set(
-                        &key,
-                        AddConfigEntry {
-                            key: key.clone(),
-                            value: params.mount_path.clone(),
-                            last_value: "".to_string(),
-                            category: "preferences".to_string(),
-                            system: 0,
-                        },
-                        Some(&database),
-                    )
-                    .await?;
+                match uuid {
+                    Some(uuid) => {
+                        //Drive is set to auto mount
+                        let key = format!("auto-mount-{uuid}");
+                        config
+                            .write()
+                            .await
+                            .set(
+                                &key,
+                                AddConfigEntry {
+                                    key: key.clone(),
+                                    value: params.mount_path.clone(),
+                                    last_value: "".to_string(),
+                                    category: "preferences".to_string(),
+                                    system: 0,
+                                },
+                                Some(&database),
+                            )
+                            .await?;
+                    }
+                    None => {
+                        warn!("Unable to automount without a device UUID");
+                    }
+                }
             }
             //Find the Disk we are Mounting.
             create_dir_all(&params.mount_path).await?;
