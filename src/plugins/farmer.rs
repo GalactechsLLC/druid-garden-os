@@ -316,7 +316,9 @@ impl FarmerManager {
         if Path::new(BACKUP_PATH).exists() {
             let _ = remove_file(BACKUP_PATH).await;
         }
-        rename(BIN_PATH, BACKUP_PATH).await?;
+        if Path::new(BIN_PATH).exists() {
+            rename(BIN_PATH, BACKUP_PATH).await?;
+        }
         copy(TMP_PATH, BIN_PATH).await.map(|_| ())
     }
     async fn set_executable_bit<P: AsRef<Path>>(path: P) -> Result<(), Error> {
@@ -348,8 +350,8 @@ impl FarmerManager {
             version,
             if arch == "x86_64" {
                 "amd64"
-            } else if arch == "aarch64" {
-                arch
+            } else if arch == "aarch64" || arch == "arm64" {
+                "arm64"
             } else {
                 return Err(Error::new(
                     ErrorKind::Unsupported,

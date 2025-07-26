@@ -52,7 +52,10 @@ impl LedManager {
         config_manager: Arc<RwLock<ConfigManager>>,
         db: SqlitePool,
     ) -> Result<Self, Error> {
-        let mut chips = detect_gpio_chips().await?;
+        let mut chips = detect_gpio_chips().await.unwrap_or_else(|e| {
+            error!("Error while detect gpio chips: {:?}", e);
+            vec![]
+        });
         chips.sort_by(|my, other| my.name().cmp(other.name()));
         let red_pins = match config_manager.read().await.get("led-red-pins").await {
             Some(pins) => {

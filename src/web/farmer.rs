@@ -6,7 +6,7 @@ use crate::legacy::PreloadConfig;
 use crate::plugins::farmer::{
     load_farmer_config, save_farmer_config, FarmerManager, FarmerStatus, HarvesterConfig,
 };
-use crate::plugins::system_monitor::{DiskInfo, SystemMonitorPlugin};
+use crate::plugins::system_monitor:: SystemMonitorPlugin;
 use dg_fast_farmer::cli::commands::{generate_config_from_mnemonic, GenerateConfig};
 use dg_fast_farmer::farmer::config::{Config, MetricsConfig};
 use dg_fast_farmer::routes::FarmerPublicState;
@@ -121,43 +121,47 @@ pub async fn scan_for_legacy_configs(
     pool: State<SqlitePool>,
     system_monitor: State<SystemMonitorPlugin>,
 ) -> Result<Config<HarvesterConfig>, Error> {
-    let drives: Vec<DiskInfo> = system_monitor
-        .0
-        .get_disk_info()
-        .await?
-        .into_iter()
-        .filter(|d| d.mount_path.is_some())
+    system_monitor.0.reload_disks().await?;
+    let disk_info = system_monitor.0.get_disk_info().await?;
+    let mut mounted_devices: Vec<String> =
+        disk_info
+        .iter()
+        .filter_map(|v| {
+            v.mount_path.clone()
+        })
         .collect();
+    for disk in disk_info {
+        let mounted_partitions: Vec<String> = disk.partitions
+            .iter()
+            .filter_map(|v| {
+                v.mount_path.as_ref().map(|path| path.display().to_string()).clone()
+            })
+            .collect();
+        mounted_devices.extend(mounted_partitions);
+    }
     //Scan Mounted Devices for preload.pconf if found parse and generate a config,
     //we are only searching 1 level deep, pconfs should be at the root of the drive
     let mut current_config = load_farmer_config(pool.0.as_ref()).await?;
     let mut pconfs = vec![];
-    for drive in drives {
-        match &drive.mount_path {
-            Some(mount_path) => {
-                let mount_path = PathBuf::from(mount_path);
-                for entry in mount_path.read_dir()? {
-                    let preload_file = match entry {
-                        Ok(entry) => {
-                            if entry.file_name() == "preload.pconf" {
-                                entry
-                            } else {
-                                continue;
-                            }
-                        }
-                        Err(err) => {
-                            warn!("Error when Reading File: {err:?}");
-                            continue;
-                        }
-                    };
-                    let preload_file_path = preload_file.path();
-                    let parsed = PreloadConfig::try_from(preload_file_path.as_path())?;
-                    pconfs.push(parsed);
+    for mount_path in mounted_devices {
+        let mount_path = PathBuf::from(mount_path);
+        for entry in mount_path.read_dir()? {
+            let preload_file = match entry {
+                Ok(entry) => {
+                    if entry.file_name() == "preload.pconf" {
+                        entry
+                    } else {
+                        continue;
+                    }
                 }
-            }
-            None => {
-                warn!("Mount path not found for BlockDevice returned by 'list_mounted'");
-            }
+                Err(err) => {
+                    warn!("Error when Reading File: {err:?}");
+                    continue;
+                }
+            };
+            let preload_file_path = preload_file.path();
+            let parsed = PreloadConfig::try_from(preload_file_path.as_path())?;
+            pconfs.push(parsed);
         }
     }
     if pconfs.is_empty() {

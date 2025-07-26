@@ -50,7 +50,7 @@ pub struct MemoryInfo {
     pub used_swap: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct DiskInfo {
     pub dev_path: String,
     pub mount_path: Option<String>,
@@ -65,7 +65,7 @@ pub struct DiskInfo {
     pub disk_type: DiskType,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct DiskUsage {
     pub recently_read: u64,
     pub recently_writen: u64,

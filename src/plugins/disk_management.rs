@@ -9,6 +9,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::ffi::OsStr;
 use std::io::{Error, ErrorKind};
+use std::path::Path;
 use tokio::fs::create_dir_all;
 use tokio::process::Command;
 use tokio::sync::RwLock;
@@ -101,19 +102,35 @@ pub async fn mount(
         Some(params) => {
             //Confirm we know about the disk they want to mount
             let known_disks = system_monitor.0.get_disk_info().await?;
-            let disk = known_disks
-                .into_iter()
-                .find(|d| d.dev_path == params.device_path)
-                .ok_or(Error::new(
-                    ErrorKind::NotFound,
-                    format!(
-                        "Failed to find disk with Device Path: {}",
-                        params.device_path
-                    ),
-                ))?;
+            //First Check Disks, then Check Partitions
+            let mount_name = match known_disks
+                .iter()
+                .find(|d| d.dev_path == params.device_path) {
+                Some(disk) => Some(disk.name.clone()),
+                None => {
+                    let mut value = None;
+                    for disk in known_disks {
+                        let path_buf = Path::new(&params.device_path);
+                        value = disk.partitions
+                            .into_iter()
+                            .find(|p| p.device == path_buf)
+                            .map(|p| p.name.clone());
+                        if value.is_some() {
+                            break;
+                        }
+                    }
+                    value
+                }
+            }.ok_or(Error::new(
+                ErrorKind::NotFound,
+                format!(
+                    "Failed to find disk with Device Path: {}",
+                    params.device_path
+                ),
+            ))?;
             if params.auto_mount.unwrap_or(false) {
                 //Drive is set to auto mount
-                let key = format!("auto-mount-{}", disk.name);
+                let key = format!("auto-mount-{}", mount_name);
                 config
                     .write()
                     .await
