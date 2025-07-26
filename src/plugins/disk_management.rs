@@ -105,13 +105,15 @@ pub async fn mount(
             //First Check Disks, then Check Partitions
             let mount_name = match known_disks
                 .iter()
-                .find(|d| d.dev_path == params.device_path) {
+                .find(|d| d.dev_path == params.device_path)
+            {
                 Some(disk) => Some(disk.name.clone()),
                 None => {
                     let mut value = None;
                     for disk in known_disks {
                         let path_buf = Path::new(&params.device_path);
-                        value = disk.partitions
+                        value = disk
+                            .partitions
                             .into_iter()
                             .find(|p| p.device == path_buf)
                             .map(|p| p.name.clone());
@@ -121,7 +123,8 @@ pub async fn mount(
                     }
                     value
                 }
-            }.ok_or(Error::new(
+            }
+            .ok_or(Error::new(
                 ErrorKind::NotFound,
                 format!(
                     "Failed to find disk with Device Path: {}",
@@ -130,7 +133,7 @@ pub async fn mount(
             ))?;
             if params.auto_mount.unwrap_or(false) {
                 //Drive is set to auto mount
-                let key = format!("auto-mount-{}", mount_name);
+                let key = format!("auto-mount-{mount_name}");
                 config
                     .write()
                     .await

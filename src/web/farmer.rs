@@ -6,7 +6,7 @@ use crate::legacy::PreloadConfig;
 use crate::plugins::farmer::{
     load_farmer_config, save_farmer_config, FarmerManager, FarmerStatus, HarvesterConfig,
 };
-use crate::plugins::system_monitor:: SystemMonitorPlugin;
+use crate::plugins::system_monitor::SystemMonitorPlugin;
 use dg_fast_farmer::cli::commands::{generate_config_from_mnemonic, GenerateConfig};
 use dg_fast_farmer::farmer::config::{Config, MetricsConfig};
 use dg_fast_farmer::routes::FarmerPublicState;
@@ -123,18 +123,19 @@ pub async fn scan_for_legacy_configs(
 ) -> Result<Config<HarvesterConfig>, Error> {
     system_monitor.0.reload_disks().await?;
     let disk_info = system_monitor.0.get_disk_info().await?;
-    let mut mounted_devices: Vec<String> =
-        disk_info
+    let mut mounted_devices: Vec<String> = disk_info
         .iter()
-        .filter_map(|v| {
-            v.mount_path.clone()
-        })
+        .filter_map(|v| v.mount_path.clone())
         .collect();
     for disk in disk_info {
-        let mounted_partitions: Vec<String> = disk.partitions
+        let mounted_partitions: Vec<String> = disk
+            .partitions
             .iter()
             .filter_map(|v| {
-                v.mount_path.as_ref().map(|path| path.display().to_string()).clone()
+                v.mount_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .clone()
             })
             .collect();
         mounted_devices.extend(mounted_partitions);

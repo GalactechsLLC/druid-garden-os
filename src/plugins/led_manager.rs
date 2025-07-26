@@ -53,7 +53,7 @@ impl LedManager {
         db: SqlitePool,
     ) -> Result<Self, Error> {
         let mut chips = detect_gpio_chips().await.unwrap_or_else(|e| {
-            error!("Error while detect gpio chips: {:?}", e);
+            error!("Error while detect gpio chips: {e:?}");
             vec![]
         });
         chips.sort_by(|my, other| my.name().cmp(other.name()));
