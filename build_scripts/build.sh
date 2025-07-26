@@ -31,6 +31,7 @@ sudo chmod +x "${build_dir}/userpatches/customize-image.sh"
 echo "Building DG-OS for ${ARMBIAN_BOARD}"
 cd "${build_dir}" || exit
 export PREFER_DOCKER=yes
+export PI_PASSWORD="dgos123!"
 ./compile.sh BOARD=${ARMBIAN_BOARD} BRANCH="${ARMBIAN_BRANCH}" RELEASE="${ARMBIAN_RELEASE}" \
   BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no NETWORKING_STACK="network-manager" COMPRESS_OUTPUTIMAGE=sha,gz
 # shellcheck disable=SC2086
