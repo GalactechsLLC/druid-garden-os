@@ -13,12 +13,14 @@ path="src/main.rs"
 
 [dependencies]
 argon2 = { version = "0.5.3"}
+blst = "0.3.14"
 bollard = "0.18.1"
 dg_edge_updater = { version = "1.0.0" }
 dg_fast_farmer = { version = "2.0.2" }
+dg_xch_clients = { version="2.1.2" }
 dg_xch_core = { version="2.1.2" }
 dg_logger = { version="2.1.2" }
-dg_sysfs = { version = "1.1.4"}
+dg_sysfs = { version = "1.1.5"}
 dg_network_manager = { version = "1.0.0" }
 gpiod = "0.3.0"
 home = "0.5.11"

@@ -469,9 +469,9 @@ dependencies = [
 
 [[package]]
 name = "blst"
-version = "0.3.14"
+version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47c79a94619fade3c0b887670333513a67ac28a6a7e653eb260bf0d4103db38d"
+checksum = "4fd49896f12ac9b6dcd7a5998466b9b58263a695a3dd1ecc1aaca2e12a90b080"
 dependencies = [
  "cc",
  "glob",
@@ -1059,9 +1059,9 @@ dependencies = [
 
 [[package]]
 name = "dg_sysfs"
-version = "1.1.4"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b24dddc928773fb6d7701b88bdcf43f1f5d4b63a8f747d21b87188b0a4e1ead5"
+checksum = "9f36ddc1b367668724314f7621d7d322240d5184ed429e56477d154210fc1391"
 dependencies = [
  "dg_logger",
  "libc",
@@ -1295,12 +1295,14 @@ name = "druid-garden-os"
 version = "1.0.1"
 dependencies = [
  "argon2",
+ "blst",
  "bollard",
  "dg_edge_updater",
  "dg_fast_farmer",
  "dg_logger",
  "dg_network_manager",
  "dg_sysfs",
+ "dg_xch_clients",
  "dg_xch_core",
  "gpiod",
  "home",

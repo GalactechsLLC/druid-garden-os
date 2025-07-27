@@ -12,52 +12,61 @@ DEBIAN_FRONTEND=noninteractive apt install curl dnsmasq iw ntfs-3g ntpdate -y
 DEBIAN_FRONTEND=noninteractive apt upgrade -y
 ###################### Install System Deps End #####################
 
-###################### Prepare First-Run Wizard #########################
-echo "Configuring Armbian first-login defaults"
+###################### Set Passwords Directly #########################
+echo "Setting up users and passwords directly"
 
-# Allow SSH even while firstlogin runs (remove PAM lock)
+# Set root password directly (don't rely on first-login wizard)
+echo "root:dgos123!" | chpasswd
+
+# Create druid user and set password
+useradd -m -s /bin/bash -G sudo,adm,dialout,cdrom,floppy,audio,video,plugdev,netdev druid 2>/dev/null || true
+echo "druid:dgos123!" | chpasswd
+
+# Ensure home directory exists with correct permissions
+mkdir -p /home/druid
+chown druid:druid /home/druid
+chmod 755 /home/druid
+###################### Set Passwords Directly End #########################
+
+###################### Skip First-Login Wizard Completely #########################
+echo "Disabling Armbian first-login wizard..."
+
+# Remove the first-login trigger file
+rm -f /root/.not_logged_in_yet
+
+# Create the completion marker that Armbian checks for
+touch /root/.armbian_first_login_check_complete
+
+# Disable the first-login service completely
+systemctl disable armbian-firstlogin.service 2>/dev/null || true
+systemctl mask armbian-firstlogin.service 2>/dev/null || true
+
+# Remove first-login related PAM restrictions
 sed -i '/pam_nologin.so/d' /etc/pam.d/sshd
+sed -i '/pam_nologin.so/d' /etc/pam.d/login
 
-# Preset first-login answers so no interaction is needed
-cat > /root/.not_logged_in_yet <<EOF
-SET_LANG_BASED_ON_LOCATION="n"
-PRESET_LOCALE="en_US.UTF-8"
-PRESET_TIMEZONE="America/Los_Angeles"
+# Set locale and timezone directly to avoid prompts
+echo 'LANG=en_US.UTF-8' > /etc/default/locale
+echo 'America/Los_Angeles' > /etc/timezone
+ln -sf /usr/share/zoneinfo/America/Los_Angeles /etc/localtime
+locale-gen en_US.UTF-8
 
-# Root password (wizard will hash this)
-PRESET_ROOT_PASSWORD="dgos123!"
+# Mark system as configured
+touch /etc/armbian-image-release
+echo "ARMBIAN_IMAGE_CONFIGURED=yes" >> /etc/armbian-image-release
 
-# Networking defaults
-PRESET_NET_CHANGE_DEFAULTS="1"
-PRESET_NET_ETHERNET_ENABLED="1"
-PRESET_NET_WIFI_ENABLED="1"
-
-# Create druid user with password
-PRESET_USER_NAME="druid"
-PRESET_USER_PASSWORD="dgos123!"
-PRESET_DEFAULT_REALNAME="Druid Garden"
-
-# Skip unnecessary prompts but still run wizard to apply users/passwords
-PRESET_CONNECT_WIRELESS="n"
-SKIP_FIRST_LOGIN="no"
-SKIP_ARMBIAN_PROMPT="yes"
-ENABLED="yes"
-EOF
-
-chown root:root /root/.not_logged_in_yet
-chmod 600 /root/.not_logged_in_yet
-
-# Ensure firstlogin service is enabled so the wizard applies these presets
-systemctl enable armbian-firstlogin.service || true
-###################### Prepare First-Run Wizard End #########################
+echo "First-login wizard disabled ✓"
+###################### Skip First-Login Wizard End #########################
 
 ###################### Enable SSH #########################
 echo "Enabling SSH login"
 sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config
 sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sed -i 's/^#\?ChallengeResponseAuthentication .*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/^#\?UsePAM .*/UsePAM yes/' /etc/ssh/sshd_config
+
 systemctl unmask ssh ssh.socket || true
 systemctl enable ssh || true
-systemctl restart ssh || true
 ###################### Enable SSH End #########################
 
 ###################### Set Up Docker #########################
@@ -65,6 +74,10 @@ echo "Installing / Setting up Docker."
 chmod 1777 /tmp
 curl -fsSL https://get.docker.com | sed 's/sleep 20/sleep 1/g' > /get-docker.sh
 sh /get-docker.sh > /dev/null
+
+# Add druid user to docker group
+usermod -aG docker druid 2>/dev/null || true
+
 systemctl enable docker.service > /dev/null || true
 systemctl start docker.service > /dev/null || true
 rm -f /get-docker.sh
@@ -100,17 +113,20 @@ systemctl disable dnsmasq > /dev/null || true
 systemctl daemon-reload > /dev/null || true
 ###################### Set Up System Services End #########################
 
-###################### Force HDMI Output for Rock 4C #########################
-if grep -q "rockpi-4cplus" /etc/armbian-release; then
-    echo "Configuring forced HDMI mode for Rock 4C"
-    sed -i '/^disp_mode=/d' /boot/armbianEnv.txt
-    sed -i '/^extraargs=/d' /boot/armbianEnv.txt
-    cat >> /boot/armbianEnv.txt <<'EOF'
-disp_mode=1920x1080p60
-extraargs=video=HDMI-A-1:1920x1080@60 video=HDMI-A-2:1920x1080@60 drm_kms_helper.edid_firmware=edid/1920x1080.bin
-EOF
-fi
-###################### Force HDMI Output End #########################
+###################### Verify Configuration #########################
+echo "Verifying user configuration..."
+id druid || echo "ERROR: druid user not created"
+getent passwd root || echo "ERROR: root user issue"
+
+echo "Verifying SSH configuration..."
+sshd -t || echo "ERROR: SSH configuration invalid"
+
+echo "User setup complete:"
+echo "  Root password: dgos123!"
+echo "  Druid user password: dgos123!"
+echo "  SSH enabled with password authentication"
+echo "  First-login wizard disabled"
+###################### Verify Configuration End #########################
 
 ###################### Final Cleanups #########################
 if [ -d "/bin.usr-is-merged" ]; then

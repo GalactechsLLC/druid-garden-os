@@ -3,7 +3,6 @@ pub mod farmer;
 pub mod file_manager;
 pub mod led_manager;
 pub mod system_monitor;
-
 use crate::database::plugins::{create_plugin, delete_plugin, get_all_plugins};
 use crate::models::plugins::{AddPlugin, Plugin, PluginType};
 use crate::version;

@@ -1,4 +1,4 @@
-use gpiod::{Active, Chip, Input, Lines, Options, Output};
+use gpiod::{Active, Bias, Chip, Input, Lines, Options, Output};
 use libc::{sched_param, timespec, CLOCK_MONOTONIC, PR_SET_TIMERSLACK, SCHED_RR};
 use log::{error, info};
 use std::collections::hash_map::Entry;
@@ -51,6 +51,7 @@ impl Pin {
                     let options = Options::output([cur_offset])
                         .values([false])
                         .active(Active::High)
+                        .bias(Bias::Disable)
                         .consumer("pi-led");
                     let lines = chip.request_lines(options)?;
                     return Ok(Self::Output(lines));

@@ -7,9 +7,11 @@ use crate::plugins::farmer::{
     load_farmer_config, save_farmer_config, FarmerManager, FarmerStatus, HarvesterConfig,
 };
 use crate::plugins::system_monitor::SystemMonitorPlugin;
+use blst::min_pk::SecretKey;
 use dg_fast_farmer::cli::commands::{generate_config_from_mnemonic, GenerateConfig};
 use dg_fast_farmer::farmer::config::{Config, MetricsConfig};
 use dg_fast_farmer::routes::FarmerPublicState;
+use dg_xch_clients::api::pool::create_pool_login_url;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::protocols::farmer::FarmerStats;
 use log::{info, warn, Level};
@@ -34,6 +36,64 @@ pub async fn is_config_ready(pool: State<SqlitePool>) -> Result<bool, Error> {
 pub async fn get_config(pool: State<SqlitePool>) -> Result<Config<HarvesterConfig>, Error> {
     let config = load_farmer_config(pool.0.as_ref()).await?;
     Ok(config)
+}
+
+#[get("/farmer/pool/login", output = "json", eoutput = "bytes")]
+pub async fn get_pool_login(
+    pool: State<SqlitePool>,
+    payload: Json<Option<Bytes32>>,
+) -> Result<String, Error> {
+    let config = load_farmer_config(pool.0.as_ref()).await?;
+    let (launcher_id, auth_secret_key) = match payload.inner() {
+        None => {
+            if let Some(v) = config.farmer_info.first() {
+                (v.launcher_id, v.auth_secret_key)
+            } else {
+                return Err(Error::new(
+                    ErrorKind::NotFound,
+                    "Config does not have Farmer Info",
+                ));
+            }
+        }
+        Some(launcher_id) => match config
+            .farmer_info
+            .iter()
+            .find(|f| f.launcher_id == Some(launcher_id))
+        {
+            None => {
+                return Err(Error::new(
+                    ErrorKind::NotFound,
+                    format!("Config does not have Farmer Info for {launcher_id}"),
+                ))
+            }
+            Some(v) => (v.launcher_id, v.auth_secret_key),
+        },
+    };
+    if let (Some(launcher_id), Some(auth_secret_key)) = (launcher_id, auth_secret_key) {
+        let pool_url = config
+            .pool_info
+            .iter()
+            .find_map(|v| {
+                if v.launcher_id == launcher_id {
+                    Some(v.pool_url.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::NotFound,
+                    format!("Failed to find Pool Url in config for launcher id {launcher_id}"),
+                )
+            })?;
+        let auth_key: SecretKey = auth_secret_key.into();
+        create_pool_login_url(&pool_url, &[(auth_key, launcher_id)]).await
+    } else {
+        Err(Error::new(
+            ErrorKind::NotFound,
+            "Config does not have Pool Login Info",
+        ))
+    }
 }
 
 #[get("/farmer/metrics", output = "json", eoutput = "bytes")]

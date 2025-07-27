@@ -11,8 +11,8 @@ use crate::web::auth::{
 use crate::web::config::{config_entry, configs, del_config, upload_config};
 use crate::web::farmer::{
     farmer_log_stream, farmer_status, generate_from_mnemonic, get_config, get_farmer_metrics,
-    get_farmer_state, get_farmer_stats, get_farmer_stats_range, is_config_ready, restart_farmer,
-    scan_for_legacy_configs, start_farmer, stop_farmer, update_config,
+    get_farmer_state, get_farmer_stats, get_farmer_stats_range, get_pool_login, is_config_ready,
+    restart_farmer, scan_for_legacy_configs, start_farmer, stop_farmer, update_config,
 };
 use crate::web::leds::{
     get_brightness, get_pin_value, set_brightness, set_color_mode, set_pin_mode,
@@ -55,6 +55,7 @@ pub fn viewer_group() -> ServiceGroup {
         .service(get_farmer_stats)
         .service(get_farmer_state)
         .service(get_farmer_stats_range)
+        .service(get_pool_login)
         .service(farmer_log_stream {
             peers: Default::default(),
         })

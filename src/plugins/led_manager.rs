@@ -62,7 +62,9 @@ impl LedManager {
                 let mut pin_set = PinSet::default();
                 for pin in pins.value.split(",") {
                     if let Ok(pin) = u32::from_str(pin) {
-                        pin_set.get_or_init(&chips, pin).await?;
+                        if let Err(e) = pin_set.get_or_init(&chips, pin).await {
+                            error!("Failed to Init Pin {pin}: {e:?}")
+                        }
                     }
                 }
                 pin_set
@@ -74,7 +76,9 @@ impl LedManager {
                 let mut pin_set = PinSet::default();
                 for pin in pins.value.split(",") {
                     if let Ok(pin) = u32::from_str(pin) {
-                        pin_set.get_or_init(&chips, pin).await?;
+                        if let Err(e) = pin_set.get_or_init(&chips, pin).await {
+                            error!("Failed to Init Pin {pin}: {e:?}")
+                        }
                     }
                 }
                 pin_set
@@ -86,7 +90,9 @@ impl LedManager {
                 let mut pin_set = PinSet::default();
                 for pin in pins.value.split(",") {
                     if let Ok(pin) = u32::from_str(pin) {
-                        pin_set.get_or_init(&chips, pin).await?;
+                        if let Err(e) = pin_set.get_or_init(&chips, pin).await {
+                            error!("Failed to Init Pin {pin}: {e:?}")
+                        }
                     }
                 }
                 pin_set
@@ -96,7 +102,7 @@ impl LedManager {
         let mut slf = Self {
             state: LedState {
                 brightness: 255,
-                mode: LedColorMode::Solid(LedColor::WHITE),
+                mode: LedColorMode::Solid(LedColor::OFF),
             },
             red_pins,
             green_pins,
@@ -191,16 +197,20 @@ impl LedManager {
             "Adding pin {pin} mode: {mode:?}, existed: {}",
             existing_value.is_some()
         );
+        let mut good_pin = false;
         match mode {
             PinColor::Red => match existing_value {
                 Some(v) => {
                     if let Some(v) = self.red_pins.set_handler(pin, v.0) {
                         v.stop();
                     }
+                    good_pin = true;
                 }
                 None => {
                     if let Err(e) = self.red_pins.get_or_init(&self.chips, pin).await {
                         error!("Failed to init pin {pin}: {e:?}");
+                    } else {
+                        good_pin = true;
                     }
                 }
             },
@@ -209,10 +219,13 @@ impl LedManager {
                     if let Some(v) = self.green_pins.set_handler(pin, v.0) {
                         v.stop();
                     }
+                    good_pin = true;
                 }
                 None => {
                     if let Err(e) = self.green_pins.get_or_init(&self.chips, pin).await {
                         error!("Failed to init pin {pin}: {e:?}");
+                    } else {
+                        good_pin = true;
                     }
                 }
             },
@@ -221,16 +234,21 @@ impl LedManager {
                     if let Some(v) = self.blue_pins.set_handler(pin, v.0) {
                         v.stop();
                     }
+                    good_pin = true;
                 }
                 None => {
                     if let Err(e) = self.blue_pins.get_or_init(&self.chips, pin).await {
                         error!("Failed to init pin {pin}: {e:?}");
+                    } else {
+                        good_pin = true;
                     }
                 }
             },
         }
-        self.update_config(pin, mode, old_mode).await;
-        self.sync_state().await;
+        if good_pin {
+            self.update_config(pin, mode, old_mode).await;
+            self.sync_state().await;
+        }
     }
     async fn update_config(&mut self, pin: u32, color: PinColor, old_color: Option<PinColor>) {
         //Remove from old config
