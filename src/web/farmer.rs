@@ -3,14 +3,15 @@ use crate::config::{
     DEFAULT_FULLNODE_WS_PORT,
 };
 use crate::legacy::PreloadConfig;
-use crate::plugins::disk_management::DiskManagerPlugin;
 use crate::plugins::farmer::{
     load_farmer_config, save_farmer_config, FarmerManager, FarmerStatus, HarvesterConfig,
 };
+use crate::plugins::system_monitor::SystemMonitorPlugin;
+use blst::min_pk::SecretKey;
 use dg_fast_farmer::cli::commands::{generate_config_from_mnemonic, GenerateConfig};
-use dg_fast_farmer::farmer::config::Config;
+use dg_fast_farmer::farmer::config::{Config, MetricsConfig};
 use dg_fast_farmer::routes::FarmerPublicState;
-use dg_sysfs::classes::block::BlockDevice;
+use dg_xch_clients::api::pool::create_pool_login_url;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::protocols::farmer::FarmerStats;
 use log::{info, warn, Level};
@@ -21,6 +22,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
+use std::path::PathBuf;
 use std::str::FromStr;
 use time::OffsetDateTime;
 
@@ -36,6 +38,64 @@ pub async fn get_config(pool: State<SqlitePool>) -> Result<Config<HarvesterConfi
     Ok(config)
 }
 
+#[get("/farmer/pool/login", output = "json", eoutput = "bytes")]
+pub async fn get_pool_login(
+    pool: State<SqlitePool>,
+    payload: Json<Option<Bytes32>>,
+) -> Result<String, Error> {
+    let config = load_farmer_config(pool.0.as_ref()).await?;
+    let (launcher_id, auth_secret_key) = match payload.inner() {
+        None => {
+            if let Some(v) = config.farmer_info.first() {
+                (v.launcher_id, v.auth_secret_key)
+            } else {
+                return Err(Error::new(
+                    ErrorKind::NotFound,
+                    "Config does not have Farmer Info",
+                ));
+            }
+        }
+        Some(launcher_id) => match config
+            .farmer_info
+            .iter()
+            .find(|f| f.launcher_id == Some(launcher_id))
+        {
+            None => {
+                return Err(Error::new(
+                    ErrorKind::NotFound,
+                    format!("Config does not have Farmer Info for {launcher_id}"),
+                ))
+            }
+            Some(v) => (v.launcher_id, v.auth_secret_key),
+        },
+    };
+    if let (Some(launcher_id), Some(auth_secret_key)) = (launcher_id, auth_secret_key) {
+        let pool_url = config
+            .pool_info
+            .iter()
+            .find_map(|v| {
+                if v.launcher_id == launcher_id {
+                    Some(v.pool_url.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::NotFound,
+                    format!("Failed to find Pool Url in config for launcher id {launcher_id}"),
+                )
+            })?;
+        let auth_key: SecretKey = auth_secret_key.into();
+        create_pool_login_url(&pool_url, &[(auth_key, launcher_id)]).await
+    } else {
+        Err(Error::new(
+            ErrorKind::NotFound,
+            "Config does not have Pool Login Info",
+        ))
+    }
+}
+
 #[get("/farmer/metrics", output = "json", eoutput = "bytes")]
 pub async fn get_farmer_metrics(farmer_manager: State<FarmerManager>) -> Result<String, Error> {
     farmer_manager.0.farmer_metrics().await
@@ -43,9 +103,9 @@ pub async fn get_farmer_metrics(farmer_manager: State<FarmerManager>) -> Result<
 
 #[get("/farmer/stats", output = "json", eoutput = "bytes")]
 pub async fn get_farmer_stats(
-    db_pool: State<SqlitePool>,
-) -> Result<HashMap<(Bytes32, Bytes32), FarmerStats>, Error> {
-    FarmerManager::recent_farmer_stats(&db_pool.0).await
+    farmer_manager: State<FarmerManager>,
+) -> Result<Vec<FarmerStats>, Error> {
+    farmer_manager.0.recent_farmer_stats().await
 }
 
 #[get("/farmer/state", output = "json", eoutput = "bytes")]
@@ -93,7 +153,7 @@ pub async fn farmer_log_stream(
     let level = Level::from_str(level.as_str()).map_err(|e| {
         Error::new(
             ErrorKind::InvalidInput,
-            format!("{} is not a valid Log Level: {e:?}", level),
+            format!("{level} is not a valid Log Level: {e:?}"),
         )
     })?;
     farmer_manager.0.farmer_log_stream(level, socket).await
@@ -119,43 +179,50 @@ pub async fn update_config(
 #[post("/farmer/config/scan", output = "json", eoutput = "bytes")]
 pub async fn scan_for_legacy_configs(
     pool: State<SqlitePool>,
-    disks: State<DiskManagerPlugin>,
+    system_monitor: State<SystemMonitorPlugin>,
 ) -> Result<Config<HarvesterConfig>, Error> {
-    let drives = disks.0.list_mounted().await?;
+    system_monitor.0.reload_disks().await?;
+    let disk_info = system_monitor.0.get_disk_info().await?;
+    let mut mounted_devices: Vec<String> = disk_info
+        .iter()
+        .filter_map(|v| v.mount_path.clone())
+        .collect();
+    for disk in disk_info {
+        let mounted_partitions: Vec<String> = disk
+            .partitions
+            .iter()
+            .filter_map(|v| {
+                v.mount_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .clone()
+            })
+            .collect();
+        mounted_devices.extend(mounted_partitions);
+    }
     //Scan Mounted Devices for preload.pconf if found parse and generate a config,
     //we are only searching 1 level deep, pconfs should be at the root of the drive
     let mut current_config = load_farmer_config(pool.0.as_ref()).await?;
     let mut pconfs = vec![];
-    for drive in drives {
-        let mount_path = match drive {
-            BlockDevice::Disk(d) => d.mount_path,
-            BlockDevice::Partition(p) => p.mount_path,
-            _ => continue,
-        };
-        match mount_path {
-            Some(mount_path) => {
-                for entry in mount_path.read_dir()? {
-                    let preload_file = match entry {
-                        Ok(entry) => {
-                            if entry.file_name() == "preload.pconf" {
-                                entry
-                            } else {
-                                continue;
-                            }
-                        }
-                        Err(err) => {
-                            warn!("Error when Reading File: {err:?}");
-                            continue;
-                        }
-                    };
-                    let preload_file_path = preload_file.path();
-                    let parsed = PreloadConfig::try_from(preload_file_path.as_path())?;
-                    pconfs.push(parsed);
+    for mount_path in mounted_devices {
+        let mount_path = PathBuf::from(mount_path);
+        for entry in mount_path.read_dir()? {
+            let preload_file = match entry {
+                Ok(entry) => {
+                    if entry.file_name() == "preload.pconf" {
+                        entry
+                    } else {
+                        continue;
+                    }
                 }
-            }
-            None => {
-                warn!("Mount path not found for BlockDevice returned by 'list_mounted'");
-            }
+                Err(err) => {
+                    warn!("Error when Reading File: {err:?}");
+                    continue;
+                }
+            };
+            let preload_file_path = preload_file.path();
+            let parsed = PreloadConfig::try_from(preload_file_path.as_path())?;
+            pconfs.push(parsed);
         }
     }
     if pconfs.is_empty() {
@@ -173,7 +240,7 @@ pub async fn scan_for_legacy_configs(
                 info!("Skipping existing launcher ID");
                 continue;
             } else {
-                info!("Found new PreConfig for launcher ID {}", pre_launcher_id);
+                info!("Found new PreConfig for launcher ID {pre_launcher_id}");
                 let generated = generate_config_from_mnemonic::<HarvesterConfig>(
                     GenerateConfig {
                         output_path: None,
@@ -216,7 +283,7 @@ pub async fn generate_from_mnemonic(
 ) -> Result<Config<HarvesterConfig>, Error> {
     match payload.inner() {
         Some(config) => {
-            let generated = generate_config_from_mnemonic::<HarvesterConfig>(
+            let mut generated = generate_config_from_mnemonic::<HarvesterConfig>(
                 GenerateConfig {
                     output_path: None,
                     mnemonic_file: None,
@@ -235,6 +302,11 @@ pub async fn generate_from_mnemonic(
                 false,
             )
             .await?;
+            generated.harvester_configs.custom_config = Some(HarvesterConfig::default());
+            generated.metrics = Some(MetricsConfig {
+                enabled: true,
+                port: 9090,
+            });
             save_farmer_config(pool.0.as_ref(), &generated).await?;
             Ok(generated)
         }

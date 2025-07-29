@@ -1,7 +1,6 @@
 use portfu::prelude::serde_json;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::ErrorKind;
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -18,6 +17,6 @@ impl TryFrom<&Path> for PreloadConfig {
 
     fn try_from(value: &Path) -> Result<Self, Self::Error> {
         serde_json::from_str::<PreloadConfig>(&fs::read_to_string(value)?)
-            .map_err(|e| std::io::Error::new(ErrorKind::Other, format!("{:?}", e)))
+            .map_err(|e| std::io::Error::other(format!("{e:?}")))
     }
 }

@@ -11,7 +11,7 @@ use log::{debug, error, info, warn};
 use portfu::prelude::{Service, ServiceGroup};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::path::Path;
 use std::time::Duration;
 use tokio::fs;
@@ -32,12 +32,7 @@ pub async fn create_pool(database_path: &str) -> Result<SqlitePool, Error> {
         .max_connections(50)
         .connect_with(connect_opts)
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Failed to connect to SQLite database: {}", e),
-            )
-        })
+        .map_err(|e| Error::other(format!("Failed to connect to SQLite database: {e}")))
 }
 
 pub fn create_argon() -> Result<Argon2<'static>, Error> {
@@ -46,26 +41,20 @@ pub fn create_argon() -> Result<Argon2<'static>, Error> {
         Version::V0x13,
         //https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#argon2id
         Params::new(47104, 1, 1, Some(32))
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Invalid Argon params: {}", e)))?,
+            .map_err(|e| Error::other(format!("Invalid Argon params: {e}")))?,
     ))
 }
 
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), Error> {
-    sqlx::migrate!().run(pool).await.map_err(|e| {
-        Error::new(
-            ErrorKind::Other,
-            format!("Failed to Migrate Database: {e:?}"),
-        )
-    })
+    sqlx::migrate!()
+        .run(pool)
+        .await
+        .map_err(|e| Error::other(format!("Failed to Migrate Database: {e:?}")))
 }
 
 pub fn connect_to_docker() -> Result<Docker, Error> {
-    Docker::connect_with_defaults().map_err(|e| {
-        Error::new(
-            ErrorKind::Other,
-            format!("Failed to connect to docker: {}", e),
-        )
-    })
+    Docker::connect_with_defaults()
+        .map_err(|e| Error::other(format!("Failed to connect to docker: {e}")))
 }
 
 pub fn find_index_service(static_files: &ServiceGroup) -> Option<Service> {
@@ -90,14 +79,14 @@ pub async fn has_internet_connection() -> bool {
     ];
     let mut connection_established = false;
     for &address in &endpoints {
-        debug!("Attempting to connect to {}...", address);
+        debug!("Attempting to connect to {address}...");
         if let Ok(Ok(_stream)) = timeout(Duration::from_secs(5), TcpStream::connect(address)).await
         {
-            debug!("Successfully connected via {}!", address);
+            debug!("Successfully connected via {address}!");
             connection_established = true;
             break;
         } else {
-            warn!("Connection to {} failed.", address);
+            warn!("Connection to {address} failed.");
         }
     }
     if !connection_established {
@@ -118,16 +107,10 @@ pub async fn perform_startup_checks(
 
     //First Check if we are connected to internet
     if !has_internet_connection().await {
-        let network_manager = NetworkManagerClient::new()
-            .await
-            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
+        let network_manager = NetworkManagerClient::new().await?;
         let mut connected = false;
         //If we have no internet check for existing connections to activate
-        for device in network_manager
-            .get_devices()
-            .await
-            .map_err(|e| Error::new(ErrorKind::Other, e))?
-        {
+        for device in network_manager.get_devices().await? {
             if let Ok(true) = try_existing_connections(device).await {
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 connected = has_internet_connection().await;
@@ -186,7 +169,7 @@ pub async fn perform_startup_checks(
                     .await
                     .is_ok()
                     {
-                        info!("Started Hotspot on SSID: {}", hotspot_ssid);
+                        info!("Started Hotspot on SSID: {hotspot_ssid}");
                     }
                 }
                 None => {
@@ -206,7 +189,7 @@ pub async fn perform_startup_checks(
                             .await
                             .is_ok()
                             {
-                                info!("Started Hotspot on SSID: {}", hotspot_ssid);
+                                info!("Started Hotspot on SSID: {hotspot_ssid}");
                                 break;
                             }
                         }

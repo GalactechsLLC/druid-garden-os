@@ -57,7 +57,7 @@ RUN cargo fetch --target aarch64-unknown-linux-gnu
 RUN cargo fetch --target x86_64-unknown-linux-gnu
 
 # Stage 3: actual build with real sources
-FROM sources AS build
+FROM sources AS all_build
 ENV PATH="/root/.cargo/bin:${PATH}"
 # Copy in the full workspace
 COPY druid-garden-os-ui/    druid-garden-os-ui/
@@ -83,14 +83,41 @@ ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
     PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
     PKG_CONFIG_ALLOW_CROSS=1
 
-RUN mkdir /build/aarch64
+RUN mkdir -p /build/aarch64
 RUN cargo build --release --target aarch64-unknown-linux-gnu
 RUN cd dg_edge_updater && cargo build --release --target aarch64-unknown-linux-gnu && cd ../
 RUN mv target/aarch64-unknown-linux-gnu/release/druid-garden-os /build/aarch64/druid-garden-os.app
 RUN mv dg_edge_updater/target/aarch64-unknown-linux-gnu/release/dg_edge_updater /build/aarch64/druid-garden-edge-updater.app
 
+
+FROM sources AS build
+ENV PATH="/root/.cargo/bin:${PATH}"
+# Copy in the full workspace
+COPY druid-garden-os-ui/    druid-garden-os-ui/
+COPY dg_edge_updater/    dg_edge_updater/
+COPY src/ src/
+COPY migrations/ migrations/
+COPY .sqlx/ .sqlx/
+
+# Build the Frontend UI
+RUN cd druid-garden-os-ui && npm install && npm run build && cd ../
+
+# Build for ARM64 and collect binaries
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+    CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
+    PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
+    PKG_CONFIG_ALLOW_CROSS=1
+
+RUN mkdir -p /build/aarch64
+RUN cargo build --release --target aarch64-unknown-linux-gnu
+RUN mv target/aarch64-unknown-linux-gnu/release/druid-garden-os /build/aarch64/druid-garden-os.app
+
 FROM scratch AS bins
-COPY --from=build /build/amd64/druid-garden-os.app amd64/druid-garden-os.app
-COPY --from=build /build/amd64/druid-garden-edge-updater.app amd64/druid-garden-edge-updater.app
+COPY --from=all_build /build/amd64/druid-garden-os.app amd64/druid-garden-os.app
+COPY --from=all_build /build/amd64/druid-garden-edge-updater.app amd64/druid-garden-edge-updater.app
+COPY --from=all_build /build/aarch64/druid-garden-os.app aarch64/druid-garden-os.app
+COPY --from=all_build /build/aarch64/druid-garden-edge-updater.app aarch64/druid-garden-edge-updater.app
+
+FROM scratch AS aarch_bin
 COPY --from=build /build/aarch64/druid-garden-os.app aarch64/druid-garden-os.app
-COPY --from=build /build/aarch64/druid-garden-edge-updater.app aarch64/druid-garden-edge-updater.app

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        DELETE FROM farmer_stats\n        WHERE gathered <= $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "a7448d7ae7f20d1f36b663056260e3f67ee17245ce444b2a54128a299f50460b"
+}

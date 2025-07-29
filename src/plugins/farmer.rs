@@ -1,34 +1,34 @@
 use crate::database::config::{create_config_entry, get_config_key};
-use crate::database::stats::{get_farmer_stats_range, has_farmer_stats, save_farmer_stats};
+use crate::database::stats::{
+    get_farmer_stats_range, has_farmer_stats, prune_farmer_stats, save_farmer_stats,
+};
 use crate::models::config::{AddConfigEntry, ConfigEntry};
-use crate::models::ServerSettings;
 use dg_fast_farmer::farmer::config::{Config, MetricsConfig};
 use dg_fast_farmer::routes::FarmerPublicState;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::protocols::farmer::FarmerStats;
-use log::{debug, error, info, Level};
+use log::{debug, error, info, warn, Level};
 use portfu::client::new_websocket;
-use portfu::prelude::{serde_json, WebSocket};
+use portfu::prelude::{serde_json, State, WebSocket};
 use portfu_core::signal::await_termination;
-use reqwest::Url;
+use portfu_macros::interval;
+use reqwest::{Client, Url};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use std::fs::Permissions;
+use std::env;
 use std::io::{Error, ErrorKind};
-use std::ops::AddAssign;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
-use tokio::fs::File;
+use tokio::fs::{copy, metadata, remove_file, rename, set_permissions, File};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock};
-use tokio::task::JoinHandle;
-use tokio::time::Instant;
 
 const fn default_parallel_read() -> bool {
     true
@@ -142,71 +142,225 @@ pub async fn save_farmer_config(
     .await
 }
 
-#[cfg(target_arch = "x86_64")]
-const FAST_FARMER_BIN_URL: &str = "https://builds.druid.garden/linux_amd64/fast_farmer_gh.app";
-#[cfg(target_arch = "aarch64")]
-const FAST_FARMER_BIN_URL: &str = "https://builds.druid.garden/linux_arm64/fast_farmer_gh.app";
+#[derive(Debug, Serialize, Deserialize)]
+pub enum UpdateChannel {
+    Release,
+    Beta,
+}
+
+const FAST_FARMER_MANIFEST_URL: &str = "https://builds.druid.garden/manifest.yaml";
+const BIN_PATH: &str = "/usr/bin/fast_farmer_gh.app";
+const BACKUP_PATH: &str = "/usr/bin/fast_farmer_gh.app.bak";
+const TMP_PATH: &str = "/tmp/fast_farmer_gh.app";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FastFarmerManifest {
+    pub current_version: Version,
+    pub beta_version: Option<Version>,
+    pub date: Option<String>,
+    pub author: Option<String>,
+}
 
 pub struct FarmerManager {
     instance: Arc<RwLock<Option<Child>>>,
-    stats_handle: Option<JoinHandle<Result<(), Error>>>,
-    plugin_path: PathBuf,
     install_mutex: Mutex<()>,
     database: SqlitePool,
+    client: Client,
 }
 impl FarmerManager {
-    pub async fn new(
-        server_settings: &ServerSettings,
-        database: SqlitePool,
-    ) -> Result<FarmerManager, Error> {
-        let p_path = Path::new(&server_settings.plugin_path).join("farmer");
-        tokio::fs::create_dir_all(&p_path).await?;
-        let background_task_pool = database.clone();
+    pub async fn new(database: SqlitePool) -> Result<FarmerManager, Error> {
+        let client = Client::new();
+        let bin_path = Path::new(BIN_PATH);
+        let current_version = Self::get_binary_version(bin_path).await;
+        match current_version {
+            Some(current_version) => {
+                info!("Found Binary Version: {}", &current_version);
+            }
+            None => {
+                info!("No Binary Version Installed");
+            }
+        }
+        match Self::fetch_manifest(&client).await {
+            Ok(manifest) => {
+                info!("Found Farmer Manifest");
+                info!("Remote Version: {}", manifest.current_version);
+                match manifest.beta_version {
+                    Some(beta_version) => {
+                        if beta_version != manifest.current_version {
+                            info!("Remote Beta Version: {beta_version}");
+                        } else {
+                            info!("No Beta Version Available");
+                        }
+                    }
+                    None => {
+                        info!("No Beta Version Available");
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to fetch Farmer Manifest: {e:?}");
+            }
+        }
         Ok(Self {
+            client,
             instance: Arc::new(RwLock::new(None)),
-            stats_handle: Some(tokio::spawn(async move {
-                update_local_stats(&background_task_pool).await
-            })),
-            plugin_path: p_path.canonicalize()?,
             install_mutex: Mutex::new(()),
             database,
         })
     }
+    pub async fn is_running(&self) -> bool {
+        self.instance.read().await.is_some()
+    }
     pub async fn ensure_installed(&self) -> Result<(), Error> {
-        info!("Checking for Farmer Installiation ");
-        let install_mutex = self.install_mutex.lock().await;
-        tokio::fs::create_dir_all(&self.plugin_path).await?;
-        let bin_path = &self.plugin_path.join("fast_farmer_gh.app");
-        if bin_path.exists() {
-            info!("Farmer is up to date");
-            drop(install_mutex);
-            Ok(())
+        let bin_path = Path::new(BIN_PATH);
+        if !bin_path.exists() {
+            self.update_farmer().await
         } else {
-            info!("No Farmer Found, Installing...");
-            let file = reqwest::get(FAST_FARMER_BIN_URL).await.map_err(|e| {
-                info!("Farmer Install Failed: {e:?}");
-                Error::new(
-                    ErrorKind::Other,
-                    format!("Failed to download farmer bin file: {}", e),
-                )
-            })?;
-            tokio::fs::write(
-                &bin_path,
-                &file.bytes().await.map_err(|e| {
-                    info!("Farmer Install Failed: {e:?}");
-                    Error::new(
-                        ErrorKind::Other,
-                        format!("Failed to download farmer bin file: {}", e),
-                    )
-                })?,
-            )
-            .await?;
-            let permissions = Permissions::from_mode(0o755);
-            drop(install_mutex);
-            info!("Farmer Install Complete.");
-            tokio::fs::set_permissions(bin_path, permissions).await
+            Ok(())
         }
     }
+    pub async fn update_farmer(&self) -> Result<(), Error> {
+        info!("Checking for Farmer Installation");
+        let install_mutex = self.install_mutex.lock().await;
+        let bin_path = Path::new(BIN_PATH);
+        info!("Fetching Remote Manifest");
+        let current_manifest = Self::fetch_manifest(&self.client).await?;
+        let channel = match get_config_key(&self.database, "farmer_update_channel").await {
+            Ok(Some(channel_entry)) => match channel_entry.value.to_ascii_lowercase().as_str() {
+                "beta" => UpdateChannel::Beta,
+                "release" => UpdateChannel::Release,
+                _ => {
+                    warn!("Invalid Update Channel: {}", channel_entry.value);
+                    UpdateChannel::Release
+                }
+            },
+            _ => UpdateChannel::Release,
+        };
+        let mut install = true;
+        if bin_path.exists() {
+            info!("Checking Current Binary Version");
+            if let Some(bin_version) = Self::get_binary_version(bin_path).await {
+                match &channel {
+                    UpdateChannel::Release => {
+                        install = bin_version >= current_manifest.current_version;
+                    }
+                    UpdateChannel::Beta => {
+                        install = bin_version
+                            >= *current_manifest
+                                .beta_version
+                                .as_ref()
+                                .unwrap_or(&current_manifest.current_version);
+                    }
+                }
+            }
+        }
+        if install {
+            info!("Installing Farmer - Using {channel:?} Channel...");
+            let version = match &channel {
+                UpdateChannel::Release => current_manifest.current_version,
+                UpdateChannel::Beta => current_manifest
+                    .beta_version
+                    .unwrap_or(current_manifest.current_version),
+            };
+            let download_url = Self::get_download_url(&version.to_string())?;
+            Self::download_file(&self.client, TMP_PATH, &download_url).await?;
+            Self::set_executable_bit(TMP_PATH).await?;
+
+            // Verify downloaded binary
+            let downloaded_version = Self::get_binary_version(TMP_PATH)
+                .await
+                .ok_or(Error::other("Failed to read downloaded binary version"))?;
+            if downloaded_version != version {
+                return Err(Error::other("Downloaded binary version mismatch"));
+            }
+            Self::swap_binaries().await?;
+        }
+        drop(install_mutex);
+        Ok(())
+    }
+
+    async fn get_binary_version<P: AsRef<Path>>(path: P) -> Option<Version> {
+        let path = path.as_ref();
+        let output = Command::new(path).arg("--version").output().await.ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut sections = stdout.split_whitespace();
+        if let Some(v) = sections.next() {
+            let maybe_version = Version::parse(v).ok();
+            if maybe_version.is_some() {
+                return maybe_version;
+            }
+        }
+        if let Some(v) = sections.next() {
+            Version::parse(v).ok()
+        } else {
+            None
+        }
+    }
+    async fn fetch_manifest(client: &Client) -> Result<FastFarmerManifest, Error> {
+        let response = client
+            .get(FAST_FARMER_MANIFEST_URL)
+            .send()
+            .await
+            .map_err(Error::other)?
+            .error_for_status()
+            .map_err(Error::other)?
+            .text()
+            .await
+            .map_err(Error::other)?;
+        serde_yaml::from_str(&response).map_err(Error::other)
+    }
+    async fn swap_binaries() -> Result<(), Error> {
+        if Path::new(BACKUP_PATH).exists() {
+            let _ = remove_file(BACKUP_PATH).await;
+        }
+        if Path::new(BIN_PATH).exists() {
+            rename(BIN_PATH, BACKUP_PATH).await?;
+        }
+        copy(TMP_PATH, BIN_PATH).await.map(|_| ())
+    }
+    async fn set_executable_bit<P: AsRef<Path>>(path: P) -> Result<(), Error> {
+        let path = path.as_ref();
+        let mut perms = metadata(path).await?.permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+        set_permissions(path, perms).await
+    }
+    async fn download_file(client: &Client, path: &str, download_url: &str) -> Result<(), Error> {
+        info!("Downloading from {download_url} to {path}");
+        let mut resp = client
+            .get(download_url)
+            .send()
+            .await
+            .map_err(Error::other)?
+            .error_for_status()
+            .map_err(Error::other)?;
+        let mut out = File::create(path).await.map_err(Error::other)?;
+        while let Some(chunk) = resp.chunk().await.map_err(Error::other)? {
+            out.write_all(&chunk).await?;
+        }
+        Ok(())
+    }
+    fn get_download_url(version: &str) -> Result<String, Error> {
+        let arch = env::consts::ARCH;
+        Ok(format!(
+            "https://builds.druid.garden/{}/{}/ff_giga",
+            version,
+            if arch == "x86_64" {
+                "amd64"
+            } else if arch == "aarch64" || arch == "arm64" {
+                "arm64"
+            } else {
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "Unsupported Platform for Auto Updates",
+                ));
+            }
+        ))
+    }
+
     pub async fn start_farmer(&self, config: Config<HarvesterConfig>) -> Result<(), Error> {
         info!("Farmer Starting");
         self.ensure_installed().await?;
@@ -221,11 +375,11 @@ impl FarmerManager {
                 tmp_file
                     .write_all(
                         serde_yaml::to_string(&config)
-                            .map_err(|e| Error::new(ErrorKind::Other, e))?
+                            .map_err(Error::other)?
                             .as_bytes(),
                     )
                     .await?;
-                let child = Command::new("./fast_farmer_gh.app")
+                let child = Command::new("fast_farmer_gh.app")
                     .stdout(Stdio::null())
                     .stdin(Stdio::null())
                     .stderr(Stdio::null())
@@ -234,7 +388,6 @@ impl FarmerManager {
                     .arg("run")
                     .arg("-m")
                     .arg("cli")
-                    .current_dir(&self.plugin_path)
                     .kill_on_drop(true)
                     .spawn()?;
                 *instance = Some(child);
@@ -328,13 +481,10 @@ impl FarmerManager {
                 )
             })
     }
-    pub async fn recent_farmer_stats(
-        database: &SqlitePool,
-    ) -> Result<HashMap<(Bytes32, Bytes32), FarmerStats>, Error> {
-        let client = reqwest::Client::new();
-        let mut url = Self::farmer_url(database).await?;
+    pub async fn recent_farmer_stats(&self) -> Result<Vec<FarmerStats>, Error> {
+        let mut url = Self::farmer_url(&self.database).await?;
         url.set_path("/stats");
-        client
+        self.client
             .get(url)
             .send()
             .await
@@ -367,6 +517,8 @@ impl FarmerManager {
     ) -> Result<(), Error> {
         let mut url = Self::farmer_url(&self.database).await?;
         url.set_path(&format!("/log_stream/{level}"));
+        url.set_scheme(if url.scheme() == "https" { "wss" } else { "ws" })
+            .map_err(|_| Error::new(ErrorKind::InvalidInput, "Invalid URL"))?;
         let upstream_socket = new_websocket(url.as_str(), None).await?;
         let mut err = None;
         loop {
@@ -414,7 +566,6 @@ impl FarmerManager {
 impl Drop for FarmerManager {
     fn drop(&mut self) {
         let instance = self.instance.clone();
-        let handle = self.stats_handle.take();
         tokio::spawn(async move {
             if let Some(mut v) = instance.write().await.take() {
                 println!("Killing Farmer");
@@ -422,42 +573,33 @@ impl Drop for FarmerManager {
                 println!("Farmer Killed");
                 drop(v);
             }
-            if let Some(v) = handle {
-                v.abort();
-                let _ = v.await;
-            }
         });
     }
 }
 
-pub async fn update_local_stats(database: &SqlitePool) -> Result<(), Error> {
-    let mut run = false;
-    let mut last_update = Instant::now();
-    while run {
-        tokio::select! {
-            _ = await_termination() => {
-                run = false;
-            }
-            res = async move {
-                if last_update.elapsed().as_secs() > 30 {
-                    last_update.add_assign(last_update.elapsed());
-                }
-                let mut url = FarmerManager::farmer_url(database).await?;
-                url.set_path("/stats");
-                let stats = FarmerManager::recent_farmer_stats(database).await?;
-                for ((challenge_hash, sp_hash), farmer_stats) in stats {
-                    if !has_farmer_stats(database, challenge_hash, sp_hash).await? {
-                        save_farmer_stats(database, farmer_stats).await?;
-                    }
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                Ok::<(), Error>(())
-            } => {
-                if let Err(e) = res {
-                    error!("Error in Update Farmer Stats: {e}");
-                }
+#[interval(10_000)]
+pub async fn update_local_stats(
+    database: State<SqlitePool>,
+    farmer_manager: State<FarmerManager>,
+) -> Result<(), Error> {
+    if farmer_manager.0.is_running().await {
+        let mut url = FarmerManager::farmer_url(&database).await?;
+        url.set_path("/stats");
+        let stats = farmer_manager.0.recent_farmer_stats().await?;
+        for farmer_stats in stats {
+            if !has_farmer_stats(&database, farmer_stats.challenge_hash, farmer_stats.sp_hash)
+                .await?
+            {
+                save_farmer_stats(&database, farmer_stats).await?;
             }
         }
+        let mut older_than_timestamp = OffsetDateTime::now_utc();
+        let stat_days_to_keep = get_config_key(&database, "stats_days_saved")
+            .await?
+            .map(|c| u64::from_str(&c.value).unwrap_or(30))
+            .unwrap_or(30);
+        older_than_timestamp -= Duration::new(stat_days_to_keep * 24 * 60 * 60, 0);
+        prune_farmer_stats(&database, older_than_timestamp).await?;
     }
     Ok(())
 }

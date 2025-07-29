@@ -1,4 +1,4 @@
-use crate::plugins::disk_management::{list_disks, mount, unmount};
+use crate::plugins::disk_management::{mount, unmount};
 use crate::plugins::file_manager::{
     create_directory, create_file, get_file, list_files, remove, rename, update_file,
 };
@@ -11,8 +11,11 @@ use crate::web::auth::{
 use crate::web::config::{config_entry, configs, del_config, upload_config};
 use crate::web::farmer::{
     farmer_log_stream, farmer_status, generate_from_mnemonic, get_config, get_farmer_metrics,
-    get_farmer_stats, get_farmer_stats_range, is_config_ready, restart_farmer,
-    scan_for_legacy_configs, start_farmer, stop_farmer, update_config,
+    get_farmer_state, get_farmer_stats, get_farmer_stats_range, get_pool_login, is_config_ready,
+    restart_farmer, scan_for_legacy_configs, start_farmer, stop_farmer, update_config,
+};
+use crate::web::leds::{
+    clear_pin_modes, get_brightness, get_pin_value, set_brightness, set_color_mode, set_pin_mode
 };
 use crate::web::plugins::{
     add_plugin, all_plugins, available_plugins, del_plugin, del_plugin_environment_value,
@@ -50,7 +53,9 @@ pub fn viewer_group() -> ServiceGroup {
         .service(farmer_status)
         .service(get_farmer_metrics)
         .service(get_farmer_stats)
+        .service(get_farmer_state)
         .service(get_farmer_stats_range)
+        .service(get_pool_login)
         .service(farmer_log_stream {
             peers: Default::default(),
         })
@@ -63,7 +68,6 @@ pub fn viewer_group() -> ServiceGroup {
         .service(plugin_updates)
         .service(refresh_plugins)
         .service(plugin_status)
-        .service(list_disks)
         .service(get_info)
         .service(get_cpu)
         .service(get_gpus)
@@ -76,6 +80,12 @@ pub fn viewer_group() -> ServiceGroup {
 
 pub fn editor_group() -> ServiceGroup {
     ServiceGroup::default()
+        .service(set_pin_mode)
+        .service(set_color_mode)
+        .service(get_pin_value)
+        .service(clear_pin_modes)
+        .service(set_brightness)
+        .service(get_brightness)
         .service(do_updates)
         .service(wifi_scan)
         .service(wifi_connect)

@@ -52,7 +52,7 @@ impl BasicAuth for BasicAuthHandle {
         let fake_pass_hash = self
             .argon
             .hash_password(bad_password.as_ref(), Salt::from(&fake_salt))
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+            .map_err(|e| Error::other(format!("{e:?}")))?;
         let fake_hash_pch_bytes = fake_pass_hash.serialize();
         //Fetch the Data from the Database
         let maybe_user_info = login(&self.pool, username).await?;
@@ -80,7 +80,7 @@ impl BasicAuth for BasicAuthHandle {
                 (
                     user_info.id,
                     PasswordHash::new(pch_string.as_ref()).map_err(|e| {
-                        error!("{:?}", e);
+                        error!("{e:?}");
                         Error::new(ErrorKind::NotFound, "User not found")
                     })?,
                 )
@@ -102,7 +102,7 @@ impl BasicAuth for BasicAuthHandle {
                 (
                     -1,
                     PasswordHash::new(pch_string.as_ref()).map_err(|e| {
-                        error!("{:?}", e);
+                        error!("{e:?}");
                         Error::new(ErrorKind::NotFound, "User not found")
                     })?,
                 )
@@ -117,7 +117,7 @@ impl BasicAuth for BasicAuthHandle {
         let default_hash = self
             .argon
             .hash_password(b"Admin", &salt)
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))
+            .map_err(|e| Error::other(format!("{e:?}")))
             .map(|v| v.to_owned())?;
         if self
             .argon
@@ -208,11 +208,11 @@ pub async fn user_requires_password_update(
             let default_hash = argon
                 .0
                 .hash_password(b"Admin", &salt)
-                .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))
+                .map_err(|e| Error::other(format!("{e:?}")))
                 .map(|v| v.to_owned())?;
             let pch_string = String::from_utf8_lossy(&user.password).to_string();
             let user_hash = PasswordHash::new(pch_string.as_ref()).map_err(|e| {
-                error!("{:?}", e);
+                error!("{e:?}");
                 Error::new(ErrorKind::NotFound, "User not found")
             })?;
             Ok(default_hash == user_hash)
@@ -233,10 +233,7 @@ impl WrapperFn for PasswordUpdateWrapper {
     async fn before(&self, data: &mut ServiceData) -> WrapperResult {
         match State::<RwLock<Session>>::from_request(&mut data.request, "update_required").await {
             Err(e) => {
-                warn!(
-                    "Failed to Find User Session for Password Update Redirect: {:?}",
-                    e
-                );
+                warn!("Failed to Find User Session for Password Update Redirect: {e:?}");
                 WrapperResult::Continue
             }
             Ok(session) => match session.0.read().await.data.get::<RequireUpdate>() {

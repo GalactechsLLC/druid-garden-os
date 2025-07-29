@@ -5,3 +5,5 @@ target/
 *.sqlite-journal
 builds
 build_output
+/plugins/
+/bin_builds

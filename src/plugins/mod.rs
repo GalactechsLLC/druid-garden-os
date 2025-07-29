@@ -1,8 +1,8 @@
 pub mod disk_management;
 pub mod farmer;
 pub mod file_manager;
+pub mod led_manager;
 pub mod system_monitor;
-
 use crate::database::plugins::{create_plugin, delete_plugin, get_all_plugins};
 use crate::models::plugins::{AddPlugin, Plugin, PluginType};
 use crate::version;
@@ -251,46 +251,32 @@ impl PluginManager {
                         match handle.await {
                             Ok(output) => {
                                 if let Err(e) = output {
-                                    return Err(Error::new(
-                                        ErrorKind::Other,
-                                        format!("Failed in plugin: {}", e),
-                                    ));
+                                    return Err(Error::other(format!("Failed in plugin: {e}")));
                                 }
                             }
                             Err(e) => {
-                                return Err(Error::new(
-                                    ErrorKind::Other,
-                                    format!("Failed to join plugin thread: {}", e),
-                                ));
+                                return Err(Error::other(format!(
+                                    "Failed to join plugin thread: {e}"
+                                )));
                             }
                         }
                     }
                     info!("Connecting to Docker");
-                    let docker = Docker::connect_with_defaults().map_err(|e| {
-                        Error::new(
-                            ErrorKind::Other,
-                            format!("Failed to connect to docker: {}", e),
-                        )
-                    })?;
+                    let docker = Docker::connect_with_defaults()
+                        .map_err(|e| Error::other(format!("Failed to connect to docker: {e}")))?;
                     info!("Stopping Container");
                     docker
                         .stop_container(&plugin.name, None)
                         .await
                         .map_err(|e| {
-                            Error::new(
-                                ErrorKind::Other,
-                                format!("Failed to stop docker container: {}", e),
-                            )
+                            Error::other(format!("Failed to stop docker container: {e}"))
                         })?;
                     info!("Removing Container");
                     docker
                         .remove_container(&plugin.name, None)
                         .await
                         .map_err(|e| {
-                            Error::new(
-                                ErrorKind::Other,
-                                format!("Failed to remove docker container: {}", e),
-                            )
+                            Error::other(format!("Failed to remove docker container: {e}"))
                         })?;
                     Ok(true)
                 }
@@ -303,10 +289,10 @@ impl PluginManager {
                         match handle.await {
                             Ok(Ok(_)) => {}
                             Ok(Err(e)) => {
-                                error!("Error in Plugin: {}", e);
+                                error!("Error in Plugin: {e}");
                             }
                             Err(e) => {
-                                error!("Error Joining Plugin Thread: {}", e);
+                                error!("Error Joining Plugin Thread: {e}");
                             }
                         }
                     }
@@ -325,21 +311,14 @@ impl PluginManager {
             Some(runtime) => match runtime {
                 PluginRuntime::Docker(metadata) => {
                     info!("Connecting to Docker");
-                    let docker = Docker::connect_with_defaults().map_err(|e| {
-                        Error::new(
-                            ErrorKind::Other,
-                            format!("Failed to connect to docker: {}", e),
-                        )
-                    })?;
+                    let docker = Docker::connect_with_defaults()
+                        .map_err(|e| Error::other(format!("Failed to connect to docker: {e}")))?;
                     info!("Fetching Status");
                     docker
                         .inspect_container(&plugin.name, None)
                         .await
                         .map_err(|e| {
-                            Error::new(
-                                ErrorKind::Other,
-                                format!("Failed to remove docker container: {}", e),
-                            )
+                            Error::other(format!("Failed to remove docker container: {e}"))
                         })?;
                     match docker
                         .list_containers(Some(ListContainersOptions {
@@ -369,10 +348,9 @@ impl PluginManager {
                                 started: Some(*metadata.started),
                             }),
                         },
-                        Err(e) => Err(Error::new(
-                            ErrorKind::Other,
-                            format!("Failed to Fetch Plugin Status: {e:?}"),
-                        )),
+                        Err(e) => Err(Error::other(format!(
+                            "Failed to Fetch Plugin Status: {e:?}"
+                        ))),
                     }
                 }
                 PluginRuntime::File(runtime) => Ok(PluginStatus {
@@ -412,15 +390,10 @@ impl PluginManager {
         let plugin_yaml = if plugin_url.starts_with("http") {
             reqwest::get(plugin_url)
                 .await
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::Other,
-                        format!("Failed fetching plugin store: {}", e),
-                    )
-                })?
+                .map_err(|e| Error::other(format!("Failed fetching plugin store: {e}")))?
                 .text()
                 .await
-                .map_err(|e| Error::new(ErrorKind::Other, format!("Failed reading body: {}", e)))?
+                .map_err(|e| Error::other(format!("Failed reading body: {e}")))?
         } else {
             let mut file = tokio::fs::File::open(&plugin_url).await?;
             let mut buf = String::new();
@@ -428,7 +401,7 @@ impl PluginManager {
             buf.trim().to_string()
         };
         let plugin_store: PluginStore = serde_yaml::from_str(&plugin_yaml)
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Failed parsing yaml: {}", e)))?;
+            .map_err(|e| Error::other(format!("Failed parsing yaml: {e}")))?;
         self.available_plugins = HashMap::from_iter(
             plugin_store
                 .plugins
@@ -501,21 +474,16 @@ pub async fn start_file_plugin(
         let url = format!("{}/{}/{}", &plugin.repo, &plugin.tag, &plugin.source)
             .replace("//", "/")
             .replace("//", "/");
-        info!("Fetching Plugin From: {}", url);
+        info!("Fetching Plugin From: {url}");
         let response = reqwest::get(url)
             .await
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Failed to fetch file: {}", e)))?;
+            .map_err(|e| Error::other(format!("Failed to fetch file: {e}")))?;
         let mut file = tokio::fs::File::create(&file_path).await?;
         file.write_all(
             response
                 .bytes()
                 .await
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::Other,
-                        format!("Failed to read file from response: {}", e),
-                    )
-                })?
+                .map_err(|e| Error::other(format!("Failed to read file from response: {e}")))?
                 .as_ref(),
         )
         .await?;
@@ -540,7 +508,7 @@ pub async fn start_file_plugin(
             select! {
                 output = command.output() => {
                     if let Err(e) = output {
-                        error!("Plugin {plugin_name} Exited: {}", e);
+                        error!("Plugin {plugin_name} Exited: {e}");
                     }
                 },
                 () = async move {
@@ -561,12 +529,8 @@ pub async fn start_docker_plugin(
     plugin: Plugin,
 ) -> Result<(), Error> {
     info!("Connecting to Docker");
-    let docker = Docker::connect_with_defaults().map_err(|e| {
-        Error::new(
-            ErrorKind::Other,
-            format!("Failed to connect to docker: {}", e),
-        )
-    })?;
+    let docker = Docker::connect_with_defaults()
+        .map_err(|e| Error::other(format!("Failed to connect to docker: {e}")))?;
     let mut image_progress = docker.create_image(
         Some(CreateImageOptions {
             from_image: plugin.source.clone(),
@@ -581,11 +545,11 @@ pub async fn start_docker_plugin(
         match message {
             Ok(progress) => {
                 // You can inspect the progress message here.
-                println!("{:?}", progress);
+                println!("{progress:?}");
             }
             Err(e) => {
                 // Handle any errors encountered during image creation.
-                eprintln!("Error creating image: {}", e);
+                eprintln!("Error creating image: {e}");
             }
         }
     }
@@ -606,29 +570,20 @@ pub async fn start_docker_plugin(
                 Some(_) => {
                     info!("Found Existing Container, Shutting Down");
                     if let Err(e) = docker.stop_container(&plugin.name, None).await {
-                        eprintln!("Error stopping container: {}", e);
-                        return Err(Error::new(
-                            ErrorKind::Other,
-                            format!("Failed to stop container: {}", e),
-                        ));
+                        eprintln!("Error stopping container: {e}");
+                        return Err(Error::other(format!("Failed to stop container: {e}")));
                     }
                     // Remove the container
                     if let Err(e) = docker.remove_container(&plugin.name, None).await {
-                        eprintln!("Error removing container: {}", e);
-                        return Err(Error::new(
-                            ErrorKind::Other,
-                            format!("Failed to remove container: {}", e),
-                        ));
+                        eprintln!("Error removing container: {e}");
+                        return Err(Error::other(format!("Failed to remove container: {e}")));
                     }
                 }
             }
         }
         Err(e) => {
-            eprintln!("Error listing containers: {}", e);
-            return Err(Error::new(
-                ErrorKind::Other,
-                format!("Failed to list containers: {}", e),
-            ));
+            eprintln!("Error listing containers: {e}");
+            return Err(Error::other(format!("Failed to list containers: {e}")));
         }
     }
     let mut exposed_ports = HashMap::new();
@@ -661,23 +616,15 @@ pub async fn start_docker_plugin(
         )
         .await
         .map_err(|e| {
-            error!("Failed to create Docker Container: {}", e);
-            Error::new(
-                ErrorKind::Other,
-                format!("Failed to create docker container: {}", e),
-            )
+            error!("Failed to create Docker Container: {e}");
+            Error::other(format!("Failed to create docker container: {e}"))
         })?;
     //Start the Plugin
     info!("Starting Docker Runtime");
     docker
         .start_container::<String>(&plugin.name, None)
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Failed to start docker container: {}", e),
-            )
-        })?;
+        .map_err(|e| Error::other(format!("Failed to start docker container: {e}")))?;
     entry.insert(PluginRuntime::Docker(RuntimeMetadata {
         run: Some(Arc::new(AtomicBool::new(true))),
         join_handle: None,

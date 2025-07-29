@@ -95,7 +95,7 @@ pub async fn update_password(
         Some(user) => {
             let pch_string = String::from_utf8_lossy(&user.password).to_string();
             let hash = PasswordHash::new(pch_string.as_ref()).map_err(|e| {
-                error!("{:?}", e);
+                error!("{e:?}");
                 Error::new(ErrorKind::NotFound, "User not found")
             })?;
             if argon
@@ -113,7 +113,7 @@ pub async fn update_password(
             let salt = SaltString::generate(&mut rng);
             let pass_hash = argon
                 .hash_password(data.new_password.as_ref(), Salt::from(&salt))
-                .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+                .map_err(|e| Error::other(format!("{e:?}")))?;
             let hash_pch_bytes = pass_hash.serialize();
             let hash_bytes = hash_pch_bytes.as_bytes();
             //Set the New Password
@@ -181,7 +181,7 @@ pub async fn register(
     let salt = SaltString::generate(&mut rng);
     let pass_hash = argon
         .hash_password(data.password.as_ref(), Salt::from(&salt))
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+        .map_err(|e| Error::other(format!("{e:?}")))?;
     let hash_pch_bytes = pass_hash.serialize();
     let hash_bytes = hash_pch_bytes.as_bytes();
     sqlx::query!(

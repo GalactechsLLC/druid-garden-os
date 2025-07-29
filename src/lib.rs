@@ -2,7 +2,7 @@ use dg_logger::{DruidGardenLogger, TimestampFormat};
 use log::Level;
 use portfu_macros::static_files;
 use std::env;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 pub mod config;
 pub mod database;
 pub mod first_run;
+pub mod gpio;
 pub mod legacy;
 pub mod models;
 pub mod plugins;
@@ -33,7 +34,9 @@ pub struct HtmlFiles;
 pub type FarmerThread = RwLock<Option<JoinHandle<Result<(), Error>>>>;
 
 pub fn init_logger() -> Result<Arc<DruidGardenLogger>, Error> {
-    env::set_var("ZBUS_TRACE", "0");
+    unsafe {
+        env::set_var("ZBUS_TRACE", "0");
+    }
     DruidGardenLogger::build()
         .use_colors(true)
         .current_level(Level::Info)
@@ -41,5 +44,5 @@ pub fn init_logger() -> Result<Arc<DruidGardenLogger>, Error> {
         .with_target_level("zbus", Level::Warn)
         .with_target_level("tracing", Level::Warn)
         .init()
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
+        .map_err(Error::other)
 }
