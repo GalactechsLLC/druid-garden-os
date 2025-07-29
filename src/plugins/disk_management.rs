@@ -2,7 +2,7 @@ use crate::config::ConfigManager;
 use crate::models::config::AddConfigEntry;
 use crate::plugins::system_monitor::{DiskInfo, SystemMonitorPlugin};
 use dg_sysfs::classes::block::disk::FileSystem;
-use log::{error, warn};
+use log::{info, warn};
 use portfu::prelude::State;
 use portfu_core::Json;
 use portfu_macros::{interval, post};
@@ -42,6 +42,7 @@ impl DiskManagerPlugin {
     ) -> Result<(), Error> {
         let device_path = device_path.as_ref();
         let mount_point = mount_path.as_ref();
+        create_dir_all(mount_point).await?;
         let output = Command::new("sudo")
             .arg("mount")
             .arg(device_path)
@@ -63,21 +64,45 @@ pub async fn disk_auto_mounting(
     config: State<RwLock<ConfigManager>>,
     system_manager: State<SystemMonitorPlugin>,
 ) -> Result<(), Error> {
+    system_manager.0.reload_disks().await?;
     //Load All Known Disks
     let known_disks = system_manager.0.get_disk_info().await?;
-    //Find all unmounted Disks
-    let unmounted: Vec<DiskInfo> = known_disks
-        .into_iter()
-        .filter(|f| f.mount_path.is_none())
-        .collect();
-    //Check if Disk is set to auto mount
-    for disk in unmounted {
-        let key = format!("auto-mount-{}", disk.name);
-        if let Some(entry) = config.read().await.get(&key).await {
-            let mount_path = entry.value;
-            //Mount the disk and continue
-            if let Err(e) = disk_manager.mount(&disk.dev_path, &mount_path).await {
-                error!("Failure when Mounting Disk {}: {e:?}", disk.dev_path);
+    //Check if Disk has partition to auto mount
+    for disk in known_disks {
+        for partition in disk.partitions {
+            let uuid = match partition.file_system {
+                None => partition.uuid,
+                Some(file_system) => match file_system {
+                    FileSystem::Btrfs(uuid)
+                    | FileSystem::ExFAT(uuid)
+                    | FileSystem::Ext2(uuid)
+                    | FileSystem::Ext3(uuid)
+                    | FileSystem::Ext4(uuid)
+                    | FileSystem::F2FS(uuid)
+                    | FileSystem::FAT12(uuid)
+                    | FileSystem::FAT16(uuid)
+                    | FileSystem::FAT32(uuid)
+                    | FileSystem::JFS(uuid)
+                    | FileSystem::NTFS(uuid)
+                    | FileSystem::ReiserFS(uuid)
+                    | FileSystem::XFS(uuid) => Some(uuid),
+                    FileSystem::ISO9660 | FileSystem::Unknown => partition.uuid,
+                },
+            };
+            if let Some(uuid) = uuid {
+                let key = format!("auto-mount-{}", uuid);
+                info!("Looking Automount Entry - {key}");
+                if let Some(entry) = config.read().await.get(&key).await {
+                    info!("Found Automount Entry");
+                    if partition.mount_path.is_none() {
+                        info!("Found Unmounted Disk");
+                        let mount_path = entry.value;
+                        disk_manager
+                            .0
+                            .mount(&partition.device, &mount_path)
+                            .await?;
+                    }
+                }
             }
         }
     }

@@ -11,7 +11,7 @@ mod web;
 
 use crate::config::ConfigManager;
 use crate::models::ServerSettings;
-use crate::plugins::disk_management::DiskManagerPlugin;
+use crate::plugins::disk_management::{disk_auto_mounting, DiskManagerPlugin};
 use crate::plugins::farmer::{update_local_stats, FarmerManager};
 use crate::plugins::file_manager::FileManagerPlugin;
 use crate::plugins::led_manager::LedManager;
@@ -145,6 +145,7 @@ async fn main() -> Result<(), Error> {
         .register(manager_group())
         .register(admin_group())
         .register(super_group())
+        .task(disk_auto_mounting)
         .task(update_local_stats)
         .task(refresh_system_info);
     info!("Starting Services");

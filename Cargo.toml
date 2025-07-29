@@ -1,6 +1,6 @@
 [package]
 name = "druid-garden-os"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2021"
 
 [lib]
@@ -16,9 +16,9 @@ argon2 = { version = "0.5.3"}
 blst = "0.3.14"
 bollard = "0.18.1"
 dg_edge_updater = { version = "1.0.0" }
-dg_fast_farmer = { version = "2.0.2" }
-dg_xch_clients = { version="2.1.2" }
-dg_xch_core = { version="2.1.2" }
+dg_fast_farmer = { version = "2.1.0" }
+dg_xch_clients = { version="2.1.5" }
+dg_xch_core = { version="2.1.4" }
 dg_logger = { version="2.1.2" }
 dg_sysfs = { version = "1.1.5"}
 dg_network_manager = { version = "1.0.0" }
@@ -38,7 +38,7 @@ tokio = { version = "1.45.1", features = ["rt", "rt-multi-thread", "macros", "fs
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 reqwest = {version="0.12.4", default-features = false, features = ["rustls-tls", "json", "stream"] }
-rustls = {version = "0.23.27" }
+rustls = {version = "0.23.29" }
 semver = { version = "1.0.26", features = ["serde"]}
 serde = { version = "1.0.217", features = ["derive"] }
 serde_yaml = "0.9.33"
