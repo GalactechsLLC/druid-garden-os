@@ -3,7 +3,9 @@ pub mod farmer;
 pub mod file_manager;
 pub mod led_manager;
 pub mod system_monitor;
-use crate::database::plugins::{create_plugin, delete_plugin, get_all_plugins};
+use crate::database::plugins::{
+    create_plugin, delete_plugin, get_all_plugins, get_plugin_environment_entries,
+};
 use crate::models::plugins::{AddPlugin, Plugin, PluginType};
 use crate::version;
 use bollard::container::{Config, CreateContainerOptions, ListContainersOptions};
@@ -213,7 +215,7 @@ impl PluginManager {
         create_plugin(db, &plugin).await?;
         Ok(plugin)
     }
-    pub async fn start(&mut self, plugin: Plugin) -> Result<bool, Error> {
+    pub async fn start(&mut self, plugin: Plugin, db: &SqlitePool) -> Result<bool, Error> {
         match self.plugin_runtimes.entry(plugin.name.clone()) {
             Entry::Occupied(_) => Err(Error::new(
                 ErrorKind::AlreadyExists,
@@ -223,7 +225,7 @@ impl PluginManager {
                 match plugin.plugin_type {
                     PluginType::BuiltIn => {}
                     PluginType::Docker => {
-                        start_docker_plugin(entry, plugin).await?;
+                        start_docker_plugin(entry, plugin, db).await?;
                     }
                     PluginType::RustProject => {
                         start_rust_plugin(entry, plugin).await?;
@@ -527,6 +529,7 @@ pub async fn start_file_plugin(
 pub async fn start_docker_plugin(
     entry: VacantEntry<'_, String, PluginRuntime>,
     plugin: Plugin,
+    db: &SqlitePool,
 ) -> Result<(), Error> {
     info!("Connecting to Docker");
     let docker = Docker::connect_with_defaults()
@@ -586,20 +589,59 @@ pub async fn start_docker_plugin(
             return Err(Error::other(format!("Failed to list containers: {e}")));
         }
     }
+    // A plugin's environment entries are its config. They are passed to the container as env, and a
+    // few reserved keys configure the container's networking so a plugin can declare what it needs
+    // rather than inherit a hardcoded HTTP port. This is what lets a UDP workload (e.g. a mixnet node
+    // that sprays packets between appliances) run as a plugin at all.
+    //
+    //   DG_NETWORK_MODE   e.g. "host" — run on the host network (simplest for UDP; no per-port maps)
+    //   DG_PORT_BINDINGS  comma list of "proto/container:host", e.g. "udp/9000:9000,tcp/80:8081"
+    //                     (proto defaults to tcp, host defaults to the container port)
+    //
+    // All entries, reserved or not, are still passed as env, so the plugin can also read them.
+    let env_entries = get_plugin_environment_entries(db, &plugin.name)
+        .await
+        .unwrap_or_default();
+    let env: Vec<String> = env_entries
+        .iter()
+        .map(|e| format!("{}={}", e.key, e.value))
+        .collect();
+    let reserved = |key: &str| env_entries.iter().find(|e| e.key == key).map(|e| e.value.clone());
+
+    let mut host_config = HostConfig::default();
     let mut exposed_ports = HashMap::new();
-    exposed_ports.insert("80/tcp".to_string(), HashMap::new());
-    let mut port_bindings = HashMap::new();
-    port_bindings.insert(
-        "80/tcp".to_string(),
-        Some(vec![PortBinding {
-            host_ip: Some("0.0.0.0".to_string()),
-            host_port: Some("8081".to_string()),
-        }]),
-    );
-    let host_config = HostConfig {
-        port_bindings: Some(port_bindings),
-        ..Default::default()
-    };
+
+    if let Some(mode) = reserved("DG_NETWORK_MODE") {
+        // Host networking: the plugin binds host ports directly, which UDP peer-to-peer wants.
+        host_config.network_mode = Some(mode);
+    } else {
+        // Explicit port bindings, or the historical default (tcp 80 -> host 8081) when none are given
+        // so existing plugins are unchanged.
+        let spec = reserved("DG_PORT_BINDINGS").unwrap_or_else(|| "tcp/80:8081".to_string());
+        let mut port_bindings = HashMap::new();
+        for entry in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            // proto/container:host  — proto and host are optional.
+            let (proto, rest) = match entry.split_once('/') {
+                Some((p, r)) => (p, r),
+                None => ("tcp", entry),
+            };
+            let (container, host) = match rest.split_once(':') {
+                Some((c, h)) => (c, h),
+                None => (rest, rest),
+            };
+            let key = format!("{container}/{proto}");
+            exposed_ports.insert(key.clone(), HashMap::new());
+            port_bindings.insert(
+                key,
+                Some(vec![PortBinding {
+                    host_ip: Some("0.0.0.0".to_string()),
+                    host_port: Some(host.to_string()),
+                }]),
+            );
+        }
+        host_config.port_bindings = Some(port_bindings);
+    }
+
     info!("Creating Docker Runtime");
     let _ = docker
         .create_container(
@@ -609,6 +651,7 @@ pub async fn start_docker_plugin(
             }),
             Config {
                 image: Some(plugin.source.clone()),
+                env: Some(env),
                 exposed_ports: Some(exposed_ports),
                 host_config: Some(host_config),
                 ..Default::default()
