@@ -83,7 +83,7 @@ pub async fn start_plugin(
         Some(p) => {
             let rw_lock = state.0.clone();
             let mut plugin_manager = rw_lock.write().await;
-            let started = plugin_manager.start(p).await?;
+            let started = plugin_manager.start(p, db.as_ref()).await?;
             Ok(started)
         }
         None => Err(Error::new(
