@@ -1,14 +1,11 @@
-use log::debug;
+use super::confined_files::{ConfinedFiles, MAX_FILE_BYTES};
 use portfu::prelude::State;
 use portfu_core::Json;
 use portfu_macros::{delete, post, put};
 use serde::{Deserialize, Serialize};
 use std::io::{Error, ErrorKind};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
-use tokio::fs::{read_link, File};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::RwLock;
 
 #[derive(Debug, Serialize)]
 pub enum EntryType {
@@ -17,143 +14,148 @@ pub enum EntryType {
     SymLink(PathBuf),
     Unknown,
 }
-
 #[derive(Serialize)]
 pub struct FileEntry {
     pub path: String,
     pub entry_type: EntryType,
     pub size: u64,
 }
-
 #[derive(Serialize)]
 pub struct FileContents {
     pub contents: String,
     pub mime_type: String,
 }
-
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FileManagerPlugin {
-    problematic_paths: RwLock<Vec<PathBuf>>,
+    files: ConfinedFiles,
+}
+impl Default for FileManagerPlugin {
+    fn default() -> Self {
+        Self {
+            files: ConfinedFiles::new(PathBuf::from("/mnt")),
+        }
+    }
 }
 impl FileManagerPlugin {
-    pub fn new() -> FileManagerPlugin {
-        FileManagerPlugin::default()
+    pub fn new() -> Self {
+        Self::default()
     }
     pub async fn list(&self, path: Option<&Path>) -> Result<Vec<FileEntry>, Error> {
-        let user_path = path.unwrap_or(Path::new("/")).to_path_buf();
-        let path = if user_path.starts_with("~") {
-            let stripped = user_path
-                .strip_prefix("~")
-                .expect("Checked Path Existence Above");
-            if let Some(home_dir) = home::home_dir() {
-                home_dir.join(stripped)
-            } else {
-                stripped.to_path_buf()
-            }
-        } else {
-            user_path
-        };
-        if self.problematic_paths.read().await.contains(&path) {
-            return Err(Error::new(ErrorKind::InvalidInput, "Path is not valid"));
-        } else if is_fuse_filesystem(&path.to_string_lossy()).await? {
-            self.problematic_paths.write().await.push(path.clone());
-            return Err(Error::new(ErrorKind::InvalidInput, "Path is not valid"));
-        }
-        let mut entries: Vec<FileEntry> = Vec::new();
-        let mut dir_entry = tokio::fs::read_dir(path).await?;
-        while let Some(entry) = dir_entry.next_entry().await? {
-            let file_type = entry.file_type().await?;
-            let path_buf = entry.path();
-            let path = path_buf.to_string_lossy().to_string();
-            debug!("Found entry: {path}");
-            let (entry_type, size) = if file_type.is_dir() {
-                if self.problematic_paths.read().await.contains(&path_buf) {
-                    continue;
-                } else if is_fuse_filesystem(&path).await? {
-                    self.problematic_paths.write().await.push(path_buf.clone());
-                    continue;
-                } else {
-                    (EntryType::Directory, 0)
+        let files = self.files.clone();
+        let path = path.unwrap_or(files.root()).to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let directory = files.directory(&path)?;
+            let mut entries = Vec::new();
+            for entry in std::fs::read_dir(format!("/proc/self/fd/{}", directory.as_raw_fd()))? {
+                if entries.len() >= 10000 {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "Directory has too many entries",
+                    ));
                 }
-            } else if file_type.is_file() {
-                (EntryType::File, entry.metadata().await?.len())
-            } else if file_type.is_symlink() {
-                let linked_path = read_link(entry.path()).await?;
-                (EntryType::SymLink(linked_path), 0)
-            } else {
-                (EntryType::Unknown, 0)
-            };
-            debug!("Entry Type: {entry_type:?}");
-            entries.push(FileEntry {
-                path,
-                entry_type,
-                size,
-            })
-        }
-        Ok(entries)
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                let entry_type = if kind.is_dir() {
+                    EntryType::Directory
+                } else if kind.is_file() {
+                    EntryType::File
+                } else {
+                    EntryType::Unknown
+                };
+                entries.push(FileEntry {
+                    path: path.join(entry.file_name()).to_string_lossy().into_owned(),
+                    entry_type,
+                    size: if kind.is_file() {
+                        entry.metadata()?.len()
+                    } else {
+                        0
+                    },
+                });
+            }
+            entries.sort_by(|a, b| a.path.cmp(&b.path));
+            Ok(entries)
+        })
+        .await?
     }
     pub async fn get_file_content<P: AsRef<Path>>(&self, path: P) -> Result<FileContents, Error> {
-        let file = tokio::fs::File::open(path.as_ref()).await?;
-        let meta_data = file.metadata().await?;
-        if meta_data.is_dir() {
-            Err(Error::new(
-                ErrorKind::IsADirectory,
-                "Cannot open Directory as File",
-            ))
-        } else {
-            let contents = tokio::fs::read_to_string(path).await?;
-            let mime_type = infer::get(contents.as_bytes())
-                .map(|v| v.mime_type().to_string())
-                .unwrap_or("Unknown".to_string());
+        let files = self.files.clone();
+        let path = path.as_ref().to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let contents = files.read(&path)?;
             Ok(FileContents {
                 contents,
-                mime_type,
+                mime_type: "text/plain; charset=utf-8".into(),
             })
-        }
+        })
+        .await?
     }
     pub async fn create_file<P: AsRef<Path>>(
         &self,
         path: P,
         contents: &[u8],
     ) -> Result<bool, Error> {
-        let mut file = tokio::fs::File::create_new(path.as_ref()).await?;
-        file.write_all(contents).await?;
-        Ok(true)
+        let files = self.files.clone();
+        let path = path.as_ref().to_path_buf();
+        if contents.len() > MAX_FILE_BYTES {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Text files are limited to 1 MiB",
+            ));
+        }
+        let bytes = contents.to_vec();
+        tokio::task::spawn_blocking(move || {
+            files.create(&path, &bytes)?;
+            Ok(true)
+        })
+        .await?
     }
     pub async fn update<P: AsRef<Path>>(&self, path: P, contents: &[u8]) -> Result<bool, Error> {
+        let files = self.files.clone();
         let path = path.as_ref().to_path_buf();
-        let contents = contents.to_vec();
+        if contents.len() > MAX_FILE_BYTES {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Text files are limited to 1 MiB",
+            ));
+        }
+        let bytes = contents.to_vec();
         tokio::task::spawn_blocking(move || {
-            use std::io::Write;
-            let mut tmp_file = match path.parent() {
-                Some(parent) => NamedTempFile::new_in(parent),
-                None => NamedTempFile::new(),
-            }?;
-            tmp_file.write_all(&contents)?;
-            tmp_file.persist(path)?;
+            files.update(&path, &bytes)?;
             Ok(true)
         })
         .await?
     }
     pub async fn create_directory<P: AsRef<Path>>(&self, path: P) -> Result<bool, Error> {
-        tokio::fs::create_dir_all(path.as_ref()).await?;
-        Ok(true)
+        let files = self.files.clone();
+        let path = path.as_ref().to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            files.mkdir(&path)?;
+            Ok(true)
+        })
+        .await?
     }
     pub async fn rename<P: AsRef<Path>, T: AsRef<Path>>(
         &self,
         from: P,
         to: T,
     ) -> Result<bool, Error> {
-        tokio::fs::rename(from, to).await?;
-        Ok(true)
+        let files = self.files.clone();
+        let from = from.as_ref().to_path_buf();
+        let to = to.as_ref().to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            files.rename(&from, &to)?;
+            Ok(true)
+        })
+        .await?
     }
     pub async fn remove<P: AsRef<Path>>(&self, path: P) -> Result<bool, Error> {
-        if path.as_ref().is_dir() {
-            tokio::fs::remove_dir(path).await?;
-        } else {
-            tokio::fs::remove_file(path).await?;
-        }
-        Ok(true)
+        let files = self.files.clone();
+        let path = path.as_ref().to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            files.remove(&path)?;
+            Ok(true)
+        })
+        .await?
     }
 }
 
@@ -264,24 +266,4 @@ pub async fn remove(
         Some(params) => state.0.remove(params.path).await,
         None => Err(Error::new(ErrorKind::InvalidInput, "No Path Specified")),
     }
-}
-
-pub async fn is_fuse_filesystem(path: &str) -> Result<bool, Error> {
-    const MOUNTS_FILE: &str = "/proc/mounts";
-    let file = File::open(MOUNTS_FILE).await?;
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
-    while let Some(line) = lines.next_line().await? {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 3 && parts[1] == path && parts[2] == "fuse" {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-#[tokio::test]
-async fn test_fuse_detect() {
-    let is_fuse_path = is_fuse_filesystem("/keybase").await;
-    println!("{:?}", is_fuse_path);
 }

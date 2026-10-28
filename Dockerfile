@@ -22,11 +22,7 @@ RUN apt-get update \
     curl \
     gnupg
 
-RUN curl -fsSL https://deb.nodesource.com/setup_23.x -o nodesource_setup.sh
-RUN bash nodesource_setup.sh
-RUN apt-get update \
-     && apt-get install -y nodejs \
-     && rm -rf /var/lib/apt/lists/*
+RUN rm -rf /var/lib/apt/lists/*
 # Install rustup and add the ARM64 target
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y
@@ -47,32 +43,38 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Copy workspace Cargo.toml and lock
 COPY Cargo.toml Cargo.toml
 COPY Cargo.lock Cargo.lock
+COPY dg_edge_updater/Cargo.toml dg_edge_updater/Cargo.toml
+COPY dg_edge_updater/Cargo.lock dg_edge_updater/Cargo.lock
 
 # Inject dummy files so that `cargo fetch` caches everything
 COPY --from=toolchain dummy_main.rs src/main.rs
+COPY --from=toolchain dummy_lib.rs src/lib.rs
 COPY --from=toolchain dummy_main.rs dg_edge_updater/src/main.rs
+COPY --from=toolchain dummy_lib.rs dg_edge_updater/src/lib.rs
 
 # Fetch all dependencies for the ARM64 target
-RUN cargo fetch --target aarch64-unknown-linux-gnu
-RUN cargo fetch --target x86_64-unknown-linux-gnu
+RUN cargo fetch --locked --target aarch64-unknown-linux-gnu
+RUN cargo fetch --locked --target x86_64-unknown-linux-gnu
+RUN cargo fetch --locked --manifest-path dg_edge_updater/Cargo.toml --target aarch64-unknown-linux-gnu
+RUN cargo fetch --locked --manifest-path dg_edge_updater/Cargo.toml --target x86_64-unknown-linux-gnu
 
 # Stage 3: actual build with real sources
 FROM sources AS all_build
 ENV PATH="/root/.cargo/bin:${PATH}"
 # Copy in the full workspace
-COPY druid-garden-os-ui/    druid-garden-os-ui/
+COPY druid-garden-os-ui/public/ druid-garden-os-ui/public/
 COPY dg_edge_updater/    dg_edge_updater/
 COPY src/ src/
 COPY migrations/ migrations/
 COPY .sqlx/ .sqlx/
 
-# Build the Frontend UI
-RUN cd druid-garden-os-ui && npm install && npm run build && cd ../
+# The native browser UI is embedded directly from public/ by Rust.
+ENV SQLX_OFFLINE=true
 
 # Build for AMD64 and collect binaries
 RUN mkdir -p /build/amd64
-RUN cargo build --release --target x86_64-unknown-linux-gnu
-RUN cd dg_edge_updater && cargo build --release --target x86_64-unknown-linux-gnu && cd ../
+RUN cargo build --locked --release --target x86_64-unknown-linux-gnu
+RUN cd dg_edge_updater && cargo build --locked --release --target x86_64-unknown-linux-gnu && cd ../
 RUN mv target/x86_64-unknown-linux-gnu/release/druid-garden-os /build/amd64/druid-garden-os.app
 RUN mv dg_edge_updater/target/x86_64-unknown-linux-gnu/release/dg_edge_updater /build/amd64/druid-garden-edge-updater.app
 
@@ -84,8 +86,8 @@ ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
     PKG_CONFIG_ALLOW_CROSS=1
 
 RUN mkdir -p /build/aarch64
-RUN cargo build --release --target aarch64-unknown-linux-gnu
-RUN cd dg_edge_updater && cargo build --release --target aarch64-unknown-linux-gnu && cd ../
+RUN cargo build --locked --release --target aarch64-unknown-linux-gnu
+RUN cd dg_edge_updater && cargo build --locked --release --target aarch64-unknown-linux-gnu && cd ../
 RUN mv target/aarch64-unknown-linux-gnu/release/druid-garden-os /build/aarch64/druid-garden-os.app
 RUN mv dg_edge_updater/target/aarch64-unknown-linux-gnu/release/dg_edge_updater /build/aarch64/druid-garden-edge-updater.app
 
@@ -93,14 +95,14 @@ RUN mv dg_edge_updater/target/aarch64-unknown-linux-gnu/release/dg_edge_updater 
 FROM sources AS build
 ENV PATH="/root/.cargo/bin:${PATH}"
 # Copy in the full workspace
-COPY druid-garden-os-ui/    druid-garden-os-ui/
+COPY druid-garden-os-ui/public/ druid-garden-os-ui/public/
 COPY dg_edge_updater/    dg_edge_updater/
 COPY src/ src/
 COPY migrations/ migrations/
 COPY .sqlx/ .sqlx/
 
-# Build the Frontend UI
-RUN cd druid-garden-os-ui && npm install && npm run build && cd ../
+# The native browser UI is embedded directly from public/ by Rust.
+ENV SQLX_OFFLINE=true
 
 # Build for ARM64 and collect binaries
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
@@ -110,7 +112,7 @@ ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
     PKG_CONFIG_ALLOW_CROSS=1
 
 RUN mkdir -p /build/aarch64
-RUN cargo build --release --target aarch64-unknown-linux-gnu
+RUN cargo build --locked --release --target aarch64-unknown-linux-gnu
 RUN mv target/aarch64-unknown-linux-gnu/release/druid-garden-os /build/aarch64/druid-garden-os.app
 
 FROM scratch AS bins

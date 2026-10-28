@@ -7,7 +7,7 @@ use dg_fast_farmer::farmer::config::{Config, MetricsConfig};
 use dg_fast_farmer::routes::FarmerPublicState;
 use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::protocols::farmer::FarmerStats;
-use log::{debug, error, info, warn, Level};
+use log::{error, info, warn, Level};
 use portfu::client::new_websocket;
 use portfu::prelude::{serde_json, State, WebSocket};
 use portfu_core::signal::await_termination;
@@ -99,15 +99,12 @@ pub enum FarmerStatus {
 
 pub async fn load_farmer_config(pool: &SqlitePool) -> Result<Config<HarvesterConfig>, Error> {
     match get_config_key(pool, "farmer_config").await? {
-        Some(farmer_config) => {
-            debug!("Found Config:{:#?}", farmer_config.value);
-            serde_json::from_str(&farmer_config.value).map_err(|e| {
-                Error::new(
-                    ErrorKind::InvalidData,
-                    format!("Failed to Parse Existing Config: {e:?}"),
-                )
-            })
-        }
+        Some(farmer_config) => serde_json::from_str(&farmer_config.value).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to Parse Existing Config: {e:?}"),
+            )
+        }),
         None => {
             let config = Config {
                 fullnode_ws_host: "druid.garden".to_owned(),
@@ -161,8 +158,14 @@ pub struct FastFarmerManifest {
     pub author: Option<String>,
 }
 
+struct FarmerProcess {
+    child: Child,
+    // Keep the private configuration alive for the entire child lifetime.
+    _config_directory: tempfile::TempDir,
+}
+
 pub struct FarmerManager {
-    instance: Arc<RwLock<Option<Child>>>,
+    instance: Arc<RwLock<Option<FarmerProcess>>>,
     install_mutex: Mutex<()>,
     database: SqlitePool,
     client: Client,
@@ -210,14 +213,6 @@ impl FarmerManager {
     }
     pub async fn is_running(&self) -> bool {
         self.instance.read().await.is_some()
-    }
-    pub async fn ensure_installed(&self) -> Result<(), Error> {
-        let bin_path = Path::new(BIN_PATH);
-        if !bin_path.exists() {
-            self.update_farmer().await
-        } else {
-            Ok(())
-        }
     }
     pub async fn update_farmer(&self) -> Result<(), Error> {
         info!("Checking for Farmer Installation");
@@ -363,7 +358,7 @@ impl FarmerManager {
 
     pub async fn start_farmer(&self, config: Config<HarvesterConfig>) -> Result<(), Error> {
         info!("Farmer Starting");
-        self.ensure_installed().await?;
+        self.update_farmer().await?;
         let mut instance = self.instance.write().await;
         match &*instance {
             Some(_) => Err(Error::new(
@@ -371,7 +366,15 @@ impl FarmerManager {
                 "Farmer Already Started",
             )),
             None => {
-                let mut tmp_file = File::create("/tmp/fast_farmer_config.yaml").await?;
+                let config_directory =
+                    tempfile::Builder::new().prefix("druid-farmer-").tempdir()?;
+                let config_path = config_directory.path().join("config.yaml");
+                let mut tmp_file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&config_path)
+                    .await?;
                 tmp_file
                     .write_all(
                         serde_yaml::to_string(&config)
@@ -379,18 +382,23 @@ impl FarmerManager {
                             .as_bytes(),
                     )
                     .await?;
-                let child = Command::new("fast_farmer_gh.app")
+                tmp_file.flush().await?;
+                drop(tmp_file);
+                let child = Command::new(BIN_PATH)
                     .stdout(Stdio::null())
                     .stdin(Stdio::null())
                     .stderr(Stdio::null())
                     .arg("-c")
-                    .arg("/tmp/fast_farmer_config.yaml")
+                    .arg(&config_path)
                     .arg("run")
                     .arg("-m")
                     .arg("cli")
                     .kill_on_drop(true)
                     .spawn()?;
-                *instance = Some(child);
+                *instance = Some(FarmerProcess {
+                    child,
+                    _config_directory: config_directory,
+                });
                 Ok(())
             }
         }
@@ -398,19 +406,17 @@ impl FarmerManager {
     pub async fn stop_farmer(&self) -> Result<(), Error> {
         info!("Farmer Stopping");
         let mut instance = self.instance.write().await;
-        match instance.take() {
-            Some(mut handle) => {
-                let _ = handle.kill().await;
-                tokio::fs::remove_file("/tmp/fast_farmer_config.yaml").await?;
-                Ok(())
-            }
-            None => Ok(()),
+        if let Some(handle) = instance.as_mut() {
+            handle.child.kill().await?;
         }
+        // Drop the secret file only after the child has terminated.
+        instance.take();
+        Ok(())
     }
     pub async fn farmer_status(&self) -> FarmerStatus {
         let mut instance = self.instance.write().await;
         match &mut *instance {
-            Some(handle) => match handle.try_wait() {
+            Some(handle) => match handle.child.try_wait() {
                 Ok(None) => FarmerStatus::Running,
                 Ok(Some(exit_code)) => FarmerStatus::Exited(exit_code.code().unwrap_or_default()),
                 Err(e) => {
@@ -484,24 +490,27 @@ impl FarmerManager {
     pub async fn recent_farmer_stats(&self) -> Result<Vec<FarmerStats>, Error> {
         let mut url = Self::farmer_url(&self.database).await?;
         url.set_path("/stats");
-        self.client
+        let mut response = self
+            .client
             .get(url)
+            .timeout(Duration::from_secs(5))
             .send()
             .await
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("Failed to Connect to Farmer: {e}"),
-                )
-            })?
-            .json()
-            .await
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("Failed to Read Response: {e}"),
-                )
-            })
+            .map_err(Error::other)?
+            .error_for_status()
+            .map_err(Error::other)?;
+        let mut body = Vec::new();
+        const MAX_STATS_BYTES: usize = 1024 * 1024;
+        while let Some(chunk) = response.chunk().await.map_err(Error::other)? {
+            if chunk.len() > MAX_STATS_BYTES.saturating_sub(body.len()) {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "Farmer statistics exceed size limit",
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&body).map_err(Error::other)
     }
     pub async fn farmer_stats_range(
         &self,
@@ -569,7 +578,7 @@ impl Drop for FarmerManager {
         tokio::spawn(async move {
             if let Some(mut v) = instance.write().await.take() {
                 println!("Killing Farmer");
-                let _ = v.kill().await;
+                let _ = v.child.kill().await;
                 println!("Farmer Killed");
                 drop(v);
             }
@@ -600,6 +609,8 @@ pub async fn update_local_stats(
             .unwrap_or(30);
         older_than_timestamp -= Duration::new(stat_days_to_keep * 24 * 60 * 60, 0);
         prune_farmer_stats(&database, older_than_timestamp).await?;
+    } else {
+        info!("Farmer is not Running");
     }
     Ok(())
 }

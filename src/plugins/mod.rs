@@ -1,3 +1,7 @@
+pub mod confined_files;
+pub mod device_control;
+pub mod device_heartbeat;
+pub(crate) mod device_identity;
 pub mod disk_management;
 pub mod farmer;
 pub mod file_manager;
@@ -6,29 +10,26 @@ pub mod system_monitor;
 use crate::database::plugins::{create_plugin, delete_plugin, get_all_plugins};
 use crate::models::plugins::{AddPlugin, Plugin, PluginType};
 use crate::version;
-use bollard::container::{Config, CreateContainerOptions, ListContainersOptions};
+use bollard::container::{Config, CreateContainerOptions};
 use bollard::image::CreateImageOptions;
 use bollard::service::{HostConfig, PortBinding};
 use bollard::Docker;
-use log::{error, info, warn};
 use portfu::prelude::futures_util::StreamExt;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use std::collections::hash_map::{Entry, VacantEntry};
+use std::collections::hash_map::VacantEntry;
 use std::collections::HashMap;
 use std::fs::Permissions;
 use std::io::{Error, ErrorKind};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tokio::select;
-use tokio::task::JoinHandle;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PluginUpdates {
@@ -67,8 +68,6 @@ pub struct StorePlugin {
 }
 
 pub struct RuntimeMetadata {
-    pub run: Option<Arc<AtomicBool>>,
-    pub join_handle: Option<JoinHandle<Result<(), Error>>>,
     pub started: Arc<OffsetDateTime>,
 }
 
@@ -136,7 +135,7 @@ impl PluginManager {
         );
         manager
             .plugin_runtimes
-            .insert("Disk Manager".to_string(), PluginRuntime::BuiltIn);
+            .insert("disk_manager".to_string(), PluginRuntime::BuiltIn);
 
         manager.plugins.insert(
             "system_monitor".to_string(),
@@ -164,7 +163,7 @@ impl PluginManager {
             Plugin {
                 id: None,
                 label: "Fast Farmer".to_string(),
-                name: "Fast Farmer".to_string(),
+                name: "farmer_manager".to_string(),
                 enabled: 1,
                 plugin_type: PluginType::BuiltIn,
                 repo: "https://builds.druid.garden/".to_string(),
@@ -185,15 +184,17 @@ impl PluginManager {
         self.available_plugins.values().cloned().collect()
     }
     pub async fn add(&mut self, plugin: AddPlugin, db: &SqlitePool) -> Result<Plugin, Error> {
-        //Check Loaded Plugins for Plugin with same name
+        let plugin: Plugin = plugin.into();
+        plugin.validate_external()?;
         if self.plugins.contains_key(&plugin.name) {
             return Err(Error::new(
-                ErrorKind::InvalidInput,
-                format!("Plugin {} already exists", plugin.name),
+                ErrorKind::AlreadyExists,
+                "Plugin already exists",
             ));
         }
-        let plugin = plugin.into();
-        create_plugin(db, &plugin).await?;
+        let plugin = create_plugin(db, &plugin)
+            .await?
+            .ok_or_else(|| Error::other("Plugin was not saved"))?;
         self.plugins.insert(plugin.name.clone(), plugin.clone());
         Ok(plugin)
     }
@@ -202,204 +203,111 @@ impl PluginManager {
         plugin: AddPlugin,
         db: &SqlitePool,
     ) -> Result<Plugin, Error> {
-        //Check Loaded Plugins for Plugin with same name
-        if !self.plugins.contains_key(&plugin.name) {
+        let plugin: Plugin = plugin.into();
+        plugin.validate_external()?;
+        let current = self
+            .plugins
+            .get(&plugin.name)
+            .cloned()
+            .ok_or_else(|| Error::new(ErrorKind::NotFound, "Plugin not found"))?;
+        current.validate_external()?;
+        if self.status(current).await?.running {
             return Err(Error::new(
-                ErrorKind::InvalidInput,
-                format!("Plugin {} does not exists", plugin.name),
+                ErrorKind::WouldBlock,
+                "Stop the plugin before updating it",
             ));
         }
-        let plugin = plugin.into();
-        create_plugin(db, &plugin).await?;
+        let plugin = create_plugin(db, &plugin)
+            .await?
+            .ok_or_else(|| Error::other("Plugin was not saved"))?;
+        self.plugins.insert(plugin.name.clone(), plugin.clone());
+        self.plugin_runtimes.remove(&plugin.name);
         Ok(plugin)
     }
     pub async fn start(&mut self, plugin: Plugin) -> Result<bool, Error> {
-        match self.plugin_runtimes.entry(plugin.name.clone()) {
-            Entry::Occupied(_) => Err(Error::new(
+        plugin.validate_external()?;
+        if self.status(plugin.clone()).await?.running {
+            return Err(Error::new(
                 ErrorKind::AlreadyExists,
-                "Plugin Already Running",
-            )),
-            Entry::Vacant(entry) => {
-                match plugin.plugin_type {
-                    PluginType::BuiltIn => {}
-                    PluginType::Docker => {
-                        start_docker_plugin(entry, plugin).await?;
-                    }
-                    PluginType::RustProject => {
-                        start_rust_plugin(entry, plugin).await?;
-                    }
-                    PluginType::File => {
-                        start_file_plugin(self.bin_folder.clone(), entry, plugin).await?;
-                    }
-                    PluginType::Invalid => {
-                        warn!("Tried to Start Invalid Plugin: {}", plugin.name);
-                    }
-                }
-                Ok(true)
+                "Plugin already running",
+            ));
+        }
+        self.plugin_runtimes.remove(&plugin.name);
+        let std::collections::hash_map::Entry::Vacant(entry) =
+            self.plugin_runtimes.entry(plugin.name.clone())
+        else {
+            return Err(Error::other("Plugin runtime conflict"));
+        };
+        match plugin.plugin_type {
+            PluginType::Docker => start_docker_plugin(entry, plugin).await?,
+            PluginType::File => start_file_plugin(self.bin_folder.clone(), entry, plugin).await?,
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "Unsupported plugin type",
+                ))
             }
         }
+        Ok(true)
     }
     pub async fn stop(&mut self, plugin: Plugin) -> Result<bool, Error> {
-        match self.plugin_runtimes.entry(plugin.name.clone()) {
-            Entry::Occupied(runtime) => match runtime.remove() {
-                PluginRuntime::Docker(mut metadata) => {
-                    if let Some(run) = metadata.run.take() {
-                        run.store(false, Ordering::Relaxed);
-                    }
-                    if let Some(handle) = metadata.join_handle.take() {
-                        handle.abort();
-                        match handle.await {
-                            Ok(output) => {
-                                if let Err(e) = output {
-                                    return Err(Error::other(format!("Failed in plugin: {e}")));
-                                }
-                            }
-                            Err(e) => {
-                                return Err(Error::other(format!(
-                                    "Failed to join plugin thread: {e}"
-                                )));
-                            }
-                        }
-                    }
-                    info!("Connecting to Docker");
-                    let docker = Docker::connect_with_defaults()
-                        .map_err(|e| Error::other(format!("Failed to connect to docker: {e}")))?;
-                    info!("Stopping Container");
-                    docker
-                        .stop_container(&plugin.name, None)
-                        .await
-                        .map_err(|e| {
-                            Error::other(format!("Failed to stop docker container: {e}"))
-                        })?;
-                    info!("Removing Container");
-                    docker
-                        .remove_container(&plugin.name, None)
-                        .await
-                        .map_err(|e| {
-                            Error::other(format!("Failed to remove docker container: {e}"))
-                        })?;
-                    Ok(true)
-                }
-                PluginRuntime::File(runtime) => {
-                    if let Some(run) = runtime.run.as_ref() {
-                        run.store(false, Ordering::Relaxed);
-                    }
-                    if let Some(handle) = runtime.join_handle {
-                        handle.abort();
-                        match handle.await {
-                            Ok(Ok(_)) => {}
-                            Ok(Err(e)) => {
-                                error!("Error in Plugin: {e}");
-                            }
-                            Err(e) => {
-                                error!("Error Joining Plugin Thread: {e}");
-                            }
-                        }
-                    }
-                    Ok(true)
-                }
-                PluginRuntime::BuiltIn => Err(Error::new(
-                    ErrorKind::AlreadyExists,
-                    "Built In Plugins Cant Be Stopped",
-                )),
-            },
-            Entry::Vacant(_) => Ok(false),
-        }
-    }
-    pub async fn status(&self, plugin: Plugin) -> Result<PluginStatus, Error> {
-        match self.plugin_runtimes.get(&plugin.name) {
-            Some(runtime) => match runtime {
-                PluginRuntime::Docker(metadata) => {
-                    info!("Connecting to Docker");
-                    let docker = Docker::connect_with_defaults()
-                        .map_err(|e| Error::other(format!("Failed to connect to docker: {e}")))?;
-                    info!("Fetching Status");
-                    docker
-                        .inspect_container(&plugin.name, None)
-                        .await
-                        .map_err(|e| {
-                            Error::other(format!("Failed to remove docker container: {e}"))
-                        })?;
-                    match docker
-                        .list_containers(Some(ListContainersOptions {
-                            all: true,
-                            filters: HashMap::from([(
-                                "name".to_string(),
-                                vec![plugin.name.clone()],
-                            )]),
-                            ..Default::default()
-                        }))
-                        .await
-                    {
-                        Ok(containers) => match containers.first() {
-                            None => Ok(PluginStatus {
-                                running: false,
-                                should_be_running: false,
-                                started: None,
-                            }),
-                            Some(container) => Ok(PluginStatus {
-                                running: container.state.as_ref().map(|v| v.to_ascii_lowercase())
-                                    != Some("exited".to_string()),
-                                should_be_running: if let Some(v) = &metadata.run {
-                                    v.load(Ordering::Relaxed)
-                                } else {
-                                    plugin.enabled > 0
-                                },
-                                started: Some(*metadata.started),
-                            }),
-                        },
-                        Err(e) => Err(Error::other(format!(
-                            "Failed to Fetch Plugin Status: {e:?}"
-                        ))),
-                    }
-                }
-                PluginRuntime::File(runtime) => Ok(PluginStatus {
-                    running: runtime
-                        .join_handle
-                        .as_ref()
-                        .map(|h| !h.is_finished())
-                        .unwrap_or(false),
-                    should_be_running: if let Some(v) = &runtime.run {
-                        v.load(Ordering::Relaxed)
-                    } else {
-                        plugin.enabled > 0
-                    },
-                    started: Some(*runtime.started),
-                }),
-                PluginRuntime::BuiltIn => Ok(PluginStatus {
-                    running: true,
-                    should_be_running: true,
-                    started: Some(*self.start_time),
-                }),
-            },
-            None => {
-                if self.plugins.contains_key(&plugin.name) {
-                    Ok(PluginStatus {
-                        running: false,
-                        should_be_running: false,
-                        started: None,
-                    })
-                } else {
-                    Err(Error::new(ErrorKind::NotFound, "Plugin Does Not Exist"))
-                }
+        plugin.validate_external()?;
+        match plugin.plugin_type {
+            PluginType::Docker => {
+                stop_owned_container(&docker_client()?, &plugin.name).await?;
+            }
+            PluginType::File => {
+                stop_file_unit(&plugin.name).await?;
+            }
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "Unsupported plugin type",
+                ))
             }
         }
+        self.plugin_runtimes.remove(&plugin.name);
+        Ok(true)
+    }
+    pub async fn status(&self, plugin: Plugin) -> Result<PluginStatus, Error> {
+        if matches!(
+            self.plugin_runtimes.get(&plugin.name),
+            Some(PluginRuntime::BuiltIn)
+        ) {
+            return Ok(PluginStatus {
+                running: true,
+                should_be_running: true,
+                started: Some(*self.start_time),
+            });
+        }
+        plugin.validate_external()?;
+        let running = match plugin.plugin_type {
+            PluginType::Docker => owned_container(&docker_client()?, &plugin.name)
+                .await?
+                .is_some_and(|(_, running)| running),
+            PluginType::File => file_unit_running(&plugin.name).await?,
+            _ => false,
+        };
+        let started = self
+            .plugin_runtimes
+            .get(&plugin.name)
+            .and_then(|runtime| match runtime {
+                PluginRuntime::Docker(metadata) | PluginRuntime::File(metadata) => {
+                    Some(*metadata.started)
+                }
+                PluginRuntime::BuiltIn => None,
+            });
+        Ok(PluginStatus {
+            running,
+            should_be_running: self.plugin_runtimes.contains_key(&plugin.name),
+            started,
+        })
     }
     pub async fn update_plugin_store(&mut self) -> Result<bool, Error> {
-        let plugin_url = "https://plugins.druid.garden/plugins.yaml";
-        let plugin_yaml = if plugin_url.starts_with("http") {
-            reqwest::get(plugin_url)
-                .await
-                .map_err(|e| Error::other(format!("Failed fetching plugin store: {e}")))?
-                .text()
-                .await
-                .map_err(|e| Error::other(format!("Failed reading body: {e}")))?
-        } else {
-            let mut file = tokio::fs::File::open(&plugin_url).await?;
-            let mut buf = String::new();
-            file.read_to_string(&mut buf).await?;
-            buf.trim().to_string()
-        };
+        let plugin_yaml = String::from_utf8(
+            fetch_bytes("https://plugins.druid.garden/plugins.yaml", 1024 * 1024).await?,
+        )
+        .map_err(Error::other)?;
         let plugin_store: PluginStore = serde_yaml::from_str(&plugin_yaml)
             .map_err(|e| Error::other(format!("Failed parsing yaml: {e}")))?;
         self.available_plugins = HashMap::from_iter(
@@ -431,16 +339,13 @@ impl PluginManager {
         Ok(updates)
     }
     pub async fn uninstall(&mut self, plugin: Plugin, db: &SqlitePool) -> Result<bool, Error> {
-        if let Some(PluginRuntime::BuiltIn) = self.plugin_runtimes.get(&plugin.name) {
-            Err(Error::new(
-                ErrorKind::PermissionDenied,
-                "Unable to Install Builtin Plugins",
-            ))
-        } else {
-            let _ = self.plugins.remove(&plugin.name);
-            let _ = self.plugin_runtimes.get(&plugin.name);
-            delete_plugin(db, &plugin.name).await.map(|v| v > 0)
+        plugin.validate_external()?;
+        self.stop(plugin.clone()).await?;
+        let removed = delete_plugin(db, &plugin.name).await? > 0;
+        if removed {
+            self.plugins.remove(&plugin.name);
         }
+        Ok(removed)
     }
 }
 
@@ -451,184 +356,458 @@ pub struct PluginStatus {
     pub started: Option<OffsetDateTime>,
 }
 
-pub async fn start_rust_plugin(
-    _entry: VacantEntry<'_, String, PluginRuntime>,
-    _plugin: Plugin,
-) -> Result<(), Error> {
-    Err(Error::new(
-        ErrorKind::Unsupported,
-        "Rust Projects Not Supported Yet",
-    ))
+const OWNER_LABEL: &str = "io.druid-garden.managed";
+const PLUGIN_LABEL: &str = "io.druid-garden.plugin";
+const MAX_PLUGIN_BYTES: usize = 64 * 1024 * 1024;
+
+fn container_name(name: &str) -> String {
+    format!("dgos-plugin-{name}")
+}
+fn unit_name(name: &str) -> String {
+    format!("dgos-plugin-{name}.service")
+}
+fn unit_description(name: &str) -> String {
+    format!("Druid Garden isolated plugin: {name}")
+}
+fn docker_client() -> Result<Docker, Error> {
+    Docker::connect_with_defaults().map_err(Error::other)
 }
 
+fn owned_labels(labels: Option<&HashMap<String, String>>, name: &str) -> bool {
+    labels.is_some_and(|labels| {
+        labels.get(OWNER_LABEL).map(String::as_str) == Some("true")
+            && labels.get(PLUGIN_LABEL).map(String::as_str) == Some(name)
+    })
+}
+async fn owned_container(docker: &Docker, name: &str) -> Result<Option<(String, bool)>, Error> {
+    crate::models::plugins::validate_plugin_name(name)?;
+    let inspected = tokio::time::timeout(
+        Duration::from_secs(30),
+        docker.inspect_container(&container_name(name), None),
+    )
+    .await
+    .map_err(|_| Error::other("Container inspection timed out"))?;
+    match inspected {
+        Ok(container) => {
+            if !owned_labels(
+                container
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.labels.as_ref()),
+                name,
+            ) {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    "Refusing to touch a container not owned by this plugin manager",
+                ));
+            }
+            Ok(Some((
+                container
+                    .id
+                    .ok_or_else(|| Error::other("Container ID missing"))?,
+                container
+                    .state
+                    .and_then(|state| state.running)
+                    .unwrap_or(false),
+            )))
+        }
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => Ok(None),
+        Err(error) => Err(Error::other(error)),
+    }
+}
+async fn stop_owned_container(docker: &Docker, name: &str) -> Result<(), Error> {
+    if let Some((id, running)) = owned_container(docker, name).await? {
+        if running {
+            tokio::time::timeout(Duration::from_secs(30), docker.stop_container(&id, None))
+                .await
+                .map_err(|_| Error::other("Container stop timed out"))?
+                .map_err(Error::other)?;
+        }
+        tokio::time::timeout(Duration::from_secs(30), docker.remove_container(&id, None))
+            .await
+            .map_err(|_| Error::other("Container removal timed out"))?
+            .map_err(Error::other)?;
+    }
+    Ok(())
+}
+fn docker_image(plugin: &Plugin) -> Result<String, Error> {
+    let source = &plugin.source;
+    if source.is_empty()
+        || source.starts_with('-')
+        || !source
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:/@-".contains(&byte))
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Invalid Docker image reference",
+        ));
+    }
+    if source.contains('@')
+        || plugin.tag.is_empty()
+        || source
+            .rsplit('/')
+            .next()
+            .is_some_and(|part| part.contains(':'))
+    {
+        return Ok(source.clone());
+    }
+    if !plugin
+        .tag
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Invalid Docker image tag",
+        ));
+    }
+    Ok(format!("{source}:{}", plugin.tag))
+}
+fn isolated_host_config() -> HostConfig {
+    HostConfig {
+        port_bindings: Some(HashMap::from([(
+            "80/tcp".into(),
+            Some(vec![PortBinding {
+                host_ip: Some("127.0.0.1".into()),
+                host_port: Some("8081".into()),
+            }]),
+        )])),
+        cap_drop: Some(vec!["ALL".into()]),
+        security_opt: Some(vec!["no-new-privileges:true".into()]),
+        readonly_rootfs: Some(true),
+        memory: Some(512 * 1024 * 1024),
+        memory_swap: Some(512 * 1024 * 1024),
+        pids_limit: Some(128),
+        nano_cpus: Some(1_000_000_000),
+        tmpfs: Some(HashMap::from([(
+            "/tmp".into(),
+            "rw,noexec,nosuid,nodev,size=64m".into(),
+        )])),
+        ..Default::default()
+    }
+}
+pub async fn start_docker_plugin(
+    entry: VacantEntry<'_, String, PluginRuntime>,
+    plugin: Plugin,
+) -> Result<(), Error> {
+    plugin.validate_external()?;
+    let docker = docker_client()?;
+    let image = docker_image(&plugin)?;
+    // Resolve ownership before any destructive operation. Names alone confer no authority.
+    stop_owned_container(&docker, &plugin.name).await?;
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let mut progress = docker.create_image(
+            Some(CreateImageOptions {
+                from_image: image.clone(),
+                ..Default::default()
+            }),
+            None,
+            None,
+        );
+        while let Some(message) = progress.next().await {
+            message.map_err(Error::other)?;
+        }
+        Ok::<(), Error>(())
+    })
+    .await
+    .map_err(|_| Error::other("Plugin image pull timed out"))??;
+    // Pin this launch to the pulled image ID, not a mutable tag.
+    let image_id = docker
+        .inspect_image(&image)
+        .await
+        .map_err(Error::other)?
+        .id
+        .ok_or_else(|| Error::other("Image ID missing"))?;
+    let container = docker
+        .create_container(
+            Some(CreateContainerOptions {
+                name: container_name(&plugin.name),
+                platform: None,
+            }),
+            Config {
+                image: Some(image_id),
+                user: Some("65532:65532".to_string()),
+                labels: Some(HashMap::from([
+                    (OWNER_LABEL.to_string(), "true".to_string()),
+                    (PLUGIN_LABEL.to_string(), plugin.name.clone()),
+                ])),
+                exposed_ports: Some(HashMap::from([("80/tcp".to_string(), HashMap::new())])),
+                host_config: Some(isolated_host_config()),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(Error::other)?;
+    docker
+        .start_container::<String>(&container.id, None)
+        .await
+        .map_err(Error::other)?;
+    entry.insert(PluginRuntime::Docker(RuntimeMetadata {
+        started: Arc::new(OffsetDateTime::now_utc()),
+    }));
+    Ok(())
+}
+
+fn download_client() -> Result<reqwest::Client, Error> {
+    reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(Error::other)
+}
+async fn fetch_bytes(url: &str, limit: usize) -> Result<Vec<u8>, Error> {
+    let mut response = download_client()?
+        .get(url)
+        .send()
+        .await
+        .map_err(Error::other)?
+        .error_for_status()
+        .map_err(Error::other)?;
+    if response.status().is_redirection()
+        || response
+            .content_length()
+            .is_some_and(|length| length > limit as u64)
+    {
+        return Err(Error::other("Plugin response exceeds limits or redirects"));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(Error::other)? {
+        if bytes.len().saturating_add(chunk.len()) > limit {
+            return Err(Error::other("Plugin response exceeds limit"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+fn plugin_url(plugin: &Plugin) -> Result<reqwest::Url, Error> {
+    let mut url = reqwest::Url::parse(&plugin.repo).map_err(Error::other)?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Plugins require an HTTPS repository without URL credentials",
+        ));
+    }
+    if plugin.source.is_empty() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Plugin source is required",
+        ));
+    }
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| Error::other("Invalid repository URL"))?;
+        segments.pop_if_empty();
+        for part in [&plugin.tag, &plugin.source]
+            .into_iter()
+            .flat_map(|value| value.split('/'))
+            .filter(|part| !part.is_empty())
+        {
+            if part == "." || part == ".." {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Plugin source cannot traverse directories",
+                ));
+            }
+            segments.push(part);
+        }
+    }
+    Ok(url)
+}
+fn trusted_plugin_directory(root: &std::path::Path, name: &str) -> Result<PathBuf, Error> {
+    // The root is provisioned by the OS, never created through the web API.
+    if !root.is_absolute() || root.canonicalize()? != root {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "Plugin root must be an absolute path without symlinks",
+        ));
+    }
+    for ancestor in root.ancestors() {
+        let metadata = std::fs::symlink_metadata(ancestor)?;
+        if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "Plugin root must be root-owned and not writable by other users",
+            ));
+        }
+    }
+    let directory = root.join(name);
+    match std::fs::create_dir(&directory) {
+        Ok(()) => std::fs::set_permissions(&directory, Permissions::from_mode(0o755))?,
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error),
+    }
+    let metadata = std::fs::symlink_metadata(&directory)?;
+    if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "Unsafe plugin directory",
+        ));
+    }
+    Ok(directory)
+}
+async fn system_command(program: &str, args: &[String]) -> Result<std::process::Output, Error> {
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        Command::new(program)
+            .args(args)
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| Error::other("Plugin service operation timed out"))?
+}
+async fn file_unit_running(name: &str) -> Result<bool, Error> {
+    crate::models::plugins::validate_plugin_name(name)?;
+    let output = system_command(
+        "/usr/bin/systemctl",
+        &[
+            "show".into(),
+            "--no-pager".into(),
+            "--property=LoadState,Description,ActiveState".into(),
+            unit_name(name),
+        ],
+    )
+    .await?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    if text.lines().any(|line| line == "LoadState=not-found") {
+        return Ok(false);
+    }
+    if !output.status.success() {
+        return Err(Error::other("Cannot inspect plugin unit"));
+    }
+    let expected = format!("Description={}", unit_description(name));
+    if !text.lines().any(|line| line == expected) {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "Refusing to touch a service not owned by this plugin manager",
+        ));
+    }
+    Ok(text
+        .lines()
+        .any(|line| matches!(line, "ActiveState=active" | "ActiveState=activating")))
+}
+async fn stop_file_unit(name: &str) -> Result<(), Error> {
+    // Inspect ownership even for inactive services; never issue a stop for an
+    // unrelated unit. Collected/nonexistent units are already stopped.
+    if file_unit_running(name).await? {
+        let output =
+            system_command("/usr/bin/systemctl", &["stop".into(), unit_name(name)]).await?;
+        if !output.status.success() {
+            return Err(Error::other("Failed to stop isolated plugin service"));
+        }
+    }
+    Ok(())
+}
+fn isolated_unit_args(name: &str, executable: &std::path::Path) -> Vec<String> {
+    let mut args = vec![
+        "--quiet".into(),
+        "--collect".into(),
+        "--service-type=exec".into(),
+        format!("--unit={}", unit_name(name)),
+        format!("--description={}", unit_description(name)),
+    ];
+    for property in ["DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "NoNewPrivileges=yes", "RestrictSUIDSGID=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectControlGroups=yes", "RestrictNamespaces=yes", "LockPersonality=yes", "CapabilityBoundingSet=", "AmbientCapabilities=", "MemoryMax=512M", "TasksMax=128", "CPUQuota=100%", "LimitCORE=0", "LimitNOFILE=1024", "KillMode=control-group", "TimeoutStopSec=15s", "InaccessiblePaths=-/var/lib/druid-garden -/etc/druid-garden -/run/docker.sock -/var/run/docker.sock"] {
+        args.push(format!("--property={property}"));
+    }
+    args.push("--".into());
+    args.push(executable.to_string_lossy().into_owned());
+    args
+}
 pub async fn start_file_plugin(
     bin_folder: PathBuf,
     entry: VacantEntry<'_, String, PluginRuntime>,
     plugin: Plugin,
 ) -> Result<(), Error> {
-    info!("Starting Plugin: {}", plugin.name);
-    let working_directory = bin_folder.join(&plugin.name).canonicalize()?;
-    let file_path = working_directory.join(&plugin.name);
-    if !file_path.exists() {
-        tokio::fs::create_dir_all(&working_directory).await?;
-        let url = format!("{}/{}/{}", &plugin.repo, &plugin.tag, &plugin.source)
-            .replace("//", "/")
-            .replace("//", "/");
-        info!("Fetching Plugin From: {url}");
-        let response = reqwest::get(url)
-            .await
-            .map_err(|e| Error::other(format!("Failed to fetch file: {e}")))?;
-        let mut file = tokio::fs::File::create(&file_path).await?;
-        file.write_all(
-            response
-                .bytes()
-                .await
-                .map_err(|e| Error::other(format!("Failed to read file from response: {e}")))?
-                .as_ref(),
-        )
-        .await?;
-        file.set_permissions(Permissions::from_mode(0o755)).await?;
-        info!("Created File at: {file_path:?}");
+    plugin.validate_external()?;
+    let directory = trusted_plugin_directory(&bin_folder, &plugin.name)?;
+    let url = plugin_url(&plugin)?;
+    let bytes = fetch_bytes(url.as_str(), MAX_PLUGIN_BYTES).await?;
+    if bytes.is_empty() {
+        return Err(Error::other("Downloaded plugin is empty"));
     }
-    info!("Setting Working Directory for Plugin to: {working_directory:?}");
-    let mut command = if let Some(run_cmd) = &plugin.run_command {
-        Command::new(run_cmd)
-    } else {
-        Command::new(&plugin.name)
-    };
-    command.current_dir(working_directory);
-    command.kill_on_drop(true);
-    let run = Arc::new(AtomicBool::new(true));
-    let handle_run = run.clone();
-    let plugin_name = plugin.name.clone();
+    let staged = tempfile::NamedTempFile::new_in(&directory)?;
+    let mut file = tokio::fs::File::from_std(staged.as_file().try_clone()?);
+    file.write_all(&bytes).await?;
+    file.sync_all().await?;
+    drop(file);
+    staged
+        .as_file()
+        .set_permissions(Permissions::from_mode(0o755))?;
+    let executable = directory.join("plugin");
+    staged.persist(&executable).map_err(Error::other)?;
+    std::fs::File::open(&directory)?.sync_all()?;
+    let output = system_command(
+        "/usr/bin/systemd-run",
+        &isolated_unit_args(&plugin.name, &executable),
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(Error::other(
+            "Failed to start isolated plugin service; verify systemd sandbox support",
+        ));
+    }
     entry.insert(PluginRuntime::File(RuntimeMetadata {
-        run: Some(run),
-        join_handle: Some(tokio::spawn(async move {
-            info!("Calling Command: {command:?}");
-            select! {
-                output = command.output() => {
-                    if let Err(e) = output {
-                        error!("Plugin {plugin_name} Exited: {e}");
-                    }
-                },
-                () = async move {
-                    while handle_run.load(Ordering::Relaxed) {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                    }
-                } => (),
-            }
-            Ok(())
-        })),
         started: Arc::new(OffsetDateTime::now_utc()),
     }));
     Ok(())
 }
 
-pub async fn start_docker_plugin(
-    entry: VacantEntry<'_, String, PluginRuntime>,
-    plugin: Plugin,
-) -> Result<(), Error> {
-    info!("Connecting to Docker");
-    let docker = Docker::connect_with_defaults()
-        .map_err(|e| Error::other(format!("Failed to connect to docker: {e}")))?;
-    let mut image_progress = docker.create_image(
-        Some(CreateImageOptions {
-            from_image: plugin.source.clone(),
-            repo: plugin.repo.clone(),
-            tag: plugin.tag.clone(),
-            ..Default::default()
-        }),
-        None,
-        None,
-    );
-    while let Some(message) = image_progress.next().await {
-        match message {
-            Ok(progress) => {
-                // You can inspect the progress message here.
-                println!("{progress:?}");
-            }
-            Err(e) => {
-                // Handle any errors encountered during image creation.
-                eprintln!("Error creating image: {e}");
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn container_ownership_and_isolation_are_explicit() {
+        assert!(!owned_labels(None, "test"));
+        let mut labels = HashMap::from([
+            (OWNER_LABEL.to_string(), "true".to_string()),
+            (PLUGIN_LABEL.to_string(), "other".to_string()),
+        ]);
+        assert!(!owned_labels(Some(&labels), "test"));
+        labels.insert(PLUGIN_LABEL.into(), "test".into());
+        assert!(owned_labels(Some(&labels), "test"));
+        let policy = isolated_host_config();
+        assert_eq!(policy.readonly_rootfs, Some(true));
+        assert_eq!(policy.cap_drop, Some(vec!["ALL".into()]));
+        assert_eq!(policy.pids_limit, Some(128));
+        assert_eq!(
+            policy.port_bindings.unwrap()["80/tcp"].as_ref().unwrap()[0]
+                .host_ip
+                .as_deref(),
+            Some("127.0.0.1")
+        );
     }
-    info!("Checking if Container exists");
-    match docker
-        .list_containers(Some(ListContainersOptions {
-            all: true,
-            filters: HashMap::from([("name".to_string(), vec![plugin.name.clone()])]),
-            ..Default::default()
-        }))
-        .await
-    {
-        Ok(list) => {
-            match list.first() {
-                None => {
-                    info!("No Existing Container found");
-                }
-                Some(_) => {
-                    info!("Found Existing Container, Shutting Down");
-                    if let Err(e) = docker.stop_container(&plugin.name, None).await {
-                        eprintln!("Error stopping container: {e}");
-                        return Err(Error::other(format!("Failed to stop container: {e}")));
-                    }
-                    // Remove the container
-                    if let Err(e) = docker.remove_container(&plugin.name, None).await {
-                        eprintln!("Error removing container: {e}");
-                        return Err(Error::other(format!("Failed to remove container: {e}")));
-                    }
-                }
-            }
+    #[test]
+    fn file_units_require_privilege_and_resource_isolation() {
+        let args = isolated_unit_args(
+            "safe",
+            std::path::Path::new("/opt/druid-garden/plugins/safe/plugin"),
+        );
+        for setting in [
+            "DynamicUser=yes",
+            "ProtectSystem=strict",
+            "ProtectHome=yes",
+            "PrivateDevices=yes",
+            "NoNewPrivileges=yes",
+            "CapabilityBoundingSet=",
+            "TasksMax=128",
+        ] {
+            assert!(args.contains(&format!("--property={setting}")));
         }
-        Err(e) => {
-            eprintln!("Error listing containers: {e}");
-            return Err(Error::other(format!("Failed to list containers: {e}")));
-        }
+        assert_eq!(args[args.len() - 2], "--");
     }
-    let mut exposed_ports = HashMap::new();
-    exposed_ports.insert("80/tcp".to_string(), HashMap::new());
-    let mut port_bindings = HashMap::new();
-    port_bindings.insert(
-        "80/tcp".to_string(),
-        Some(vec![PortBinding {
-            host_ip: Some("0.0.0.0".to_string()),
-            host_port: Some("8081".to_string()),
-        }]),
-    );
-    let host_config = HostConfig {
-        port_bindings: Some(port_bindings),
-        ..Default::default()
-    };
-    info!("Creating Docker Runtime");
-    let _ = docker
-        .create_container(
-            Some(CreateContainerOptions {
-                name: plugin.name.clone(),
-                platform: None,
-            }),
-            Config {
-                image: Some(plugin.source.clone()),
-                exposed_ports: Some(exposed_ports),
-                host_config: Some(host_config),
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|e| {
-            error!("Failed to create Docker Container: {e}");
-            Error::other(format!("Failed to create docker container: {e}"))
-        })?;
-    //Start the Plugin
-    info!("Starting Docker Runtime");
-    docker
-        .start_container::<String>(&plugin.name, None)
-        .await
-        .map_err(|e| Error::other(format!("Failed to start docker container: {e}")))?;
-    entry.insert(PluginRuntime::Docker(RuntimeMetadata {
-        run: Some(Arc::new(AtomicBool::new(true))),
-        join_handle: None,
-        started: Arc::new(OffsetDateTime::now_utc()),
-    }));
-    Ok(())
 }

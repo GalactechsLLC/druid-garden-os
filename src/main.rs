@@ -11,6 +11,8 @@ mod web;
 
 use crate::config::ConfigManager;
 use crate::models::ServerSettings;
+use crate::plugins::device_control::{run_device_control, DeviceControlPlugin};
+use crate::plugins::device_heartbeat::{run_device_heartbeat, DeviceHeartbeatPlugin};
 use crate::plugins::disk_management::{disk_auto_mounting, DiskManagerPlugin};
 use crate::plugins::farmer::{update_local_stats, FarmerManager};
 use crate::plugins::file_manager::FileManagerPlugin;
@@ -24,7 +26,7 @@ use crate::utils::{
     connect_to_docker, create_argon, create_pool, find_index_service, perform_startup_checks,
     run_migrations,
 };
-use crate::web::auth::{BasicAuthHandle, PasswordUpdateWrapper};
+use crate::web::auth::{BasicAuthHandle, PasswordUpdateWrapper, RequireRole};
 use dg_logger::DruidGardenLogger;
 use druid_garden_os::init_logger;
 use log::info;
@@ -32,6 +34,7 @@ use portfu::prelude::http::HeaderName;
 use portfu::prelude::*;
 use portfu::wrappers::cors::Cors;
 use portfu::wrappers::sessions::SessionWrapper;
+use portfu_admin::users::UserRole;
 use std::env::args;
 use std::io::Error;
 use std::path::PathBuf;
@@ -61,7 +64,7 @@ async fn main() -> Result<(), Error> {
     info!("Connecting to Docker");
     let docker = connect_to_docker()?;
     info!("Setting Up Auth");
-    let basic_auth = BasicAuthHandle::new(db.clone(), argon.clone());
+    let basic_auth = BasicAuthHandle::new(db.clone(), argon.clone())?;
     info!("Setting Up Farmer Manager");
     let farmer_manager = Arc::new(FarmerManager::new(db.clone()).await?);
     info!("Setting Up Plugin Manager");
@@ -85,6 +88,8 @@ async fn main() -> Result<(), Error> {
     let file_manager = FileManagerPlugin::new();
     info!("Setting Up Disk Manager");
     let disk_manager = DiskManagerPlugin::new();
+    info!("Setting Up Device Heartbeat");
+    let heartbeat_plugin = DeviceHeartbeatPlugin::new(&db, config_manager.as_ref()).await?;
     info!("Setting Up Disk Manager");
     let led_manager = Arc::new(RwLock::new(
         LedManager::init(config_manager.clone(), db.clone()).await?,
@@ -106,6 +111,8 @@ async fn main() -> Result<(), Error> {
         .shared_state::<FarmerManager>(farmer_manager.clone())
         .shared_state(file_manager)
         .shared_state(disk_manager)
+        .shared_state(heartbeat_plugin)
+        .shared_state(DeviceControlPlugin::default())
         .shared_state::<RwLock<ConfigManager>>(config_manager)
         .default_service(index_service)
         .wrap(Arc::new(Cors::new(
@@ -138,16 +145,24 @@ async fn main() -> Result<(), Error> {
         .register(static_files)
         .wrap(Arc::new(SessionWrapper::default()))
         .register(none_group(basic_auth))
+        .wrap(Arc::new(RequireRole(UserRole::User)))
         .register(user_groups())
         .wrap(Arc::new(PasswordUpdateWrapper {}))
+        .wrap(Arc::new(RequireRole(UserRole::Viewer)))
         .register(viewer_group())
+        .wrap(Arc::new(RequireRole(UserRole::Editor)))
         .register(editor_group())
+        .wrap(Arc::new(RequireRole(UserRole::Manager)))
         .register(manager_group())
+        .wrap(Arc::new(RequireRole(UserRole::Admin)))
         .register(admin_group())
+        .wrap(Arc::new(RequireRole(UserRole::SuperAdmin)))
         .register(super_group())
         .task(disk_auto_mounting)
         .task(update_local_stats)
-        .task(refresh_system_info);
+        .task(refresh_system_info)
+        .task(run_device_heartbeat)
+        .task(run_device_control);
     info!("Starting Services");
     let res = server.build().run().await;
     info!("Shutting Down");

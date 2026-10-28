@@ -1,4 +1,6 @@
-if [ -z "$build_dir" ]; then
+#!/usr/bin/env bash
+set -euo pipefail
+if [ -z "${build_dir:-}" ]; then
  echo "build_dir Not set"
  exit 1
 fi

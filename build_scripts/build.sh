@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
 echo "Setting Up Script Runtime Dirs"
 run_dir=$(pwd)
 SOURCE=${BASH_SOURCE[0]}
@@ -31,16 +33,18 @@ sudo chmod +x "${build_dir}/userpatches/customize-image.sh"
 echo "Building DG-OS for ${ARMBIAN_BOARD}"
 cd "${build_dir}" || exit
 export PREFER_DOCKER=yes
-export PI_PASSWORD="dgos123!"
-./compile.sh BOARD=${ARMBIAN_BOARD} BRANCH="${ARMBIAN_BRANCH}" RELEASE="${ARMBIAN_RELEASE}" \
-  BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no NETWORKING_STACK="network-manager" COMPRESS_OUTPUTIMAGE=sha,gz
-# shellcheck disable=SC2086
-# shellcheck disable=SC2012
-image_name=$(find /home/luna/Galactechs/nevergreen-os/builds/output/images/ \
-  -maxdepth 1 -type f -name ${ARMBIAN_IMAGE_PATTERN} -printf '%T@ %f\n' \
-  | sort -nr \
-  | head -n 1 \
-  | cut -d' ' -f2-)
+unset PI_PASSWORD
+image_marker=$(mktemp "${build_dir}/.image-build-start.XXXXXX")
+./compile.sh BOARD="${ARMBIAN_BOARD}" BRANCH="${ARMBIAN_BRANCH}" RELEASE="${ARMBIAN_RELEASE}" \
+  BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no NETWORKING_STACK="network-manager" COMPRESS_OUTPUTIMAGE=sha
+mapfile -d '' images < <(find "${build_dir}/output/images" \
+  -maxdepth 1 -type f -name "${ARMBIAN_IMAGE_PATTERN}" -newer "$image_marker" -print0)
+rm -f "$image_marker"
+if [[ ${#images[@]} -ne 1 ]]; then
+  echo "Expected exactly one new image for ${ARMBIAN_BOARD}; found ${#images[@]}" >&2
+  exit 1
+fi
+image_name=${images[0]##*/}
 echo "Copying Image to output Folder"
 cp "${build_dir}/output/images/${image_name}" "${output_dir}/${OUTPUT_FILE_NAME}"
 echo "Zipping Image"

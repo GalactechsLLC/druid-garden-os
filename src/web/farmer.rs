@@ -16,6 +16,8 @@ use dg_xch_core::blockchain::sized_bytes::Bytes32;
 use dg_xch_core::protocols::farmer::FarmerStats;
 use log::{info, warn, Level};
 use portfu::prelude::{Path, State, WebSocket};
+use portfu::wrappers::sessions::Session;
+use portfu_admin::users::UserRole;
 use portfu_core::Json;
 use portfu_macros::{get, post, websocket};
 use serde::Deserialize;
@@ -25,6 +27,7 @@ use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::str::FromStr;
 use time::OffsetDateTime;
+use tokio::sync::RwLock;
 
 #[get("/farmer/config/ready", output = "json", eoutput = "bytes")]
 pub async fn is_config_ready(pool: State<SqlitePool>) -> Result<bool, Error> {
@@ -55,11 +58,13 @@ pub async fn get_pool_login(
                 ));
             }
         }
-        Some(launcher_id) => match config
-            .farmer_info
-            .iter()
-            .find(|f| f.launcher_id == Some(launcher_id))
-        {
+        Some(launcher_id) => match config.farmer_info.iter().find(|f| {
+            f.launcher_id.is_some_and(|id| {
+                let candidate: &[u8] = id.as_ref();
+                let requested: &[u8] = launcher_id.as_ref();
+                candidate == requested
+            })
+        }) {
             None => {
                 return Err(Error::new(
                     ErrorKind::NotFound,
@@ -87,6 +92,9 @@ pub async fn get_pool_login(
                 )
             })?;
         let auth_key: SecretKey = auth_secret_key.into();
+        // The external farmer carries its own core version. Cross the boundary
+        // through the canonical launcher ID, not version-specific Rust types.
+        let launcher_id = Bytes32::from_str(&launcher_id.to_string())?;
         create_pool_login_url(&pool_url, &[(auth_key, launcher_id)]).await
     } else {
         Err(Error::new(
@@ -148,7 +156,10 @@ pub async fn farmer_log_stream(
     socket: WebSocket,
     level: Path,
     farmer_manager: State<FarmerManager>,
+    pool: State<SqlitePool>,
+    session: State<RwLock<Session>>,
 ) -> Result<(), Error> {
+    let lease = crate::web::auth::SessionLease::capture(&session.0).await?;
     let level = level.inner();
     let level = Level::from_str(level.as_str()).map_err(|e| {
         Error::new(
@@ -156,7 +167,16 @@ pub async fn farmer_log_stream(
             format!("{level} is not a valid Log Level: {e:?}"),
         )
     })?;
-    farmer_manager.0.farmer_log_stream(level, socket).await
+    let result = tokio::select! {
+        result = farmer_manager.0.farmer_log_stream(level, socket.clone()) => result,
+        result = lease.wait_until_revoked(&pool.0, &session.0, UserRole::Viewer) => result,
+    };
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        socket.send(portfu::prelude::tokio_tungstenite::tungstenite::Message::Close(None)),
+    )
+    .await;
+    result
 }
 
 #[post("/farmer/config", output = "json", eoutput = "bytes")]
@@ -229,7 +249,7 @@ pub async fn scan_for_legacy_configs(
         Ok(current_config)
     } else {
         for pre_config in pconfs {
-            let pre_launcher_id = Bytes32::from_str(&pre_config.launcher_id)?;
+            let pre_launcher_id = pre_config.launcher_id.parse()?;
             if current_config.farmer_info.iter().any(|i| {
                 if let Some(launcher_id) = &i.launcher_id {
                     *launcher_id == pre_launcher_id

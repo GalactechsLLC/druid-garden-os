@@ -19,7 +19,8 @@ impl ServerSettings {
             .unwrap_or(8080u16);
         let database_path =
             env::var("DATABASE_FILE").unwrap_or(String::from("druid_garden.sqlite"));
-        let plugin_path = env::var("DG_BIN_PATH").unwrap_or(String::from("./plugins"));
+        let plugin_path =
+            env::var("DG_BIN_PATH").unwrap_or(String::from("/opt/druid-garden/plugins"));
         Ok(ServerSettings {
             hostname,
             port,

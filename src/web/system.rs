@@ -1,7 +1,7 @@
 use crate::database::config::get_config_key;
 use crate::utils::has_internet_connection;
 use crate::version;
-use dg_edge_updater::{fetch_manifest, UPDATER_SERVICE_NAME};
+use dg_edge_updater::{eligible_for_rollout, fetch_manifest, UPDATER_SERVICE_NAME};
 use dg_logger::DruidGardenLogger;
 use dg_network_manager::dbus_api::devices::Device;
 use dg_network_manager::{
@@ -29,6 +29,21 @@ pub async fn find_device() -> Result<String, Error> {
 }
 
 #[derive(Serialize)]
+pub struct SystemHealth {
+    status: &'static str,
+    version: &'static str,
+}
+
+// The listener starts only after database migrations and managers initialize.
+#[get("/system/health", output = "json", eoutput = "bytes")]
+pub async fn system_health() -> Result<SystemHealth, Error> {
+    Ok(SystemHealth {
+        status: "ok",
+        version: version(),
+    })
+}
+
+#[derive(Serialize)]
 pub struct UpdateInfo {
     pub remote_version: Version,
     pub local_version: Version,
@@ -43,7 +58,7 @@ pub async fn find_updates() -> Result<UpdateInfo, Error> {
     info!("Found Remote version: {remote_version}");
     let local_version = Version::parse(version()).map_err(Error::other)?;
     Ok(UpdateInfo {
-        has_update: remote_version > local_version,
+        has_update: remote_version > local_version && eligible_for_rollout(&manifest)?,
         remote_version,
         local_version,
     })
@@ -56,7 +71,7 @@ pub async fn do_updates() -> Result<String, Error> {
     let remote_version = Version::parse(&manifest.version).map_err(Error::other)?;
     info!("Found Remote version: {remote_version}");
     let local_version = Version::parse(version()).map_err(Error::other)?;
-    if remote_version > local_version {
+    if remote_version > local_version && eligible_for_rollout(&manifest)? {
         run_update_service().await?;
         Ok("true".to_owned())
     } else {
@@ -66,6 +81,7 @@ pub async fn do_updates() -> Result<String, Error> {
 
 async fn run_update_service() -> Result<(), Error> {
     let status = Command::new("systemctl")
+        .arg("--no-block")
         .arg("restart")
         .arg(UPDATER_SERVICE_NAME)
         .status()
@@ -272,8 +288,8 @@ pub async fn log_stream(
     let mut receiver = logger.0.subscribe();
     loop {
         tokio::select! {
-            result = receiver.recv() => {
-                match result {
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                match receiver.try_recv() {
                     Ok(log_entry) => {
                         if log_entry.level <= level {
                             let as_json = serde_json::to_string(&log_entry)?;
@@ -283,6 +299,7 @@ pub async fn log_stream(
                             }
                         }
                     }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => continue,
                     Err(e) => {
                         error!("Failed to read message from log channel: {e:?}");
                         break;
@@ -307,9 +324,7 @@ pub async fn log_stream(
                             }
                         }
                     }
-                    Ok(None) => {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    },
+                    Ok(None) => break,
                     Err(e) => {
                         err = Some(e);
                         break
